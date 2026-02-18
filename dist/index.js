@@ -675,6 +675,7 @@ var logger_default = new Logger();
 
 // src/lib/browser-service.ts
 import { chromium } from "playwright-core";
+import { execSync } from "child_process";
 
 // src/api/controllers/core.ts
 import _7 from "lodash";
@@ -958,6 +959,29 @@ async function getTokenLiveStatus(refreshToken) {
 }
 
 // src/lib/browser-service.ts
+function findChromiumPath() {
+  const paths = [
+    process.env.CHROMIUM_PATH,
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome"
+  ];
+  try {
+    const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
+    if (whichPath) paths.unshift(whichPath);
+  } catch {
+  }
+  for (const p of paths) {
+    if (p) {
+      try {
+        execSync(`test -f "${p}"`, { stdio: "ignore" });
+        return p;
+      } catch {
+      }
+    }
+  }
+  return "";
+}
 var SCRIPT_WHITELIST_DOMAINS = [
   "vlabstatic.com",
   "bytescm.com",
@@ -983,9 +1007,10 @@ var BrowserService = class {
       return this.launching;
     }
     this.launching = (async () => {
-      logger_default.info("BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668...");
+      const chromiumPath = findChromiumPath();
+      logger_default.info(`BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668... (path: ${chromiumPath || "default"})`);
       try {
-        this.browser = await chromium.launch({
+        const launchOptions = {
           headless: true,
           args: [
             "--no-sandbox",
@@ -996,7 +1021,11 @@ var BrowserService = class {
             "--no-zygote",
             "--single-process"
           ]
-        });
+        };
+        if (chromiumPath) {
+          launchOptions.executablePath = chromiumPath;
+        }
+        this.browser = await chromium.launch(launchOptions);
         this.browser.on("disconnected", () => {
           logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
           this.browser = null;

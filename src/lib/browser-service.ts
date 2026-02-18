@@ -1,6 +1,29 @@
 import { chromium, Browser, BrowserContext, Page } from "playwright-core";
+import { execSync } from "child_process";
 import logger from "@/lib/logger.ts";
 import { getCookiesForBrowser } from "@/api/controllers/core.ts";
+
+function findChromiumPath(): string {
+  const paths = [
+    process.env.CHROMIUM_PATH,
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+  ];
+  try {
+    const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
+    if (whichPath) paths.unshift(whichPath);
+  } catch {}
+  for (const p of paths) {
+    if (p) {
+      try {
+        execSync(`test -f "${p}"`, { stdio: "ignore" });
+        return p;
+      } catch {}
+    }
+  }
+  return "";
+}
 
 // bdms SDK 相关脚本的白名单域名
 const SCRIPT_WHITELIST_DOMAINS = [
@@ -45,9 +68,10 @@ class BrowserService {
     }
 
     this.launching = (async () => {
-      logger.info("BrowserService: 正在启动 Chromium 浏览器...");
+      const chromiumPath = findChromiumPath();
+      logger.info(`BrowserService: 正在启动 Chromium 浏览器... (path: ${chromiumPath || "default"})`);
       try {
-        this.browser = await chromium.launch({
+        const launchOptions: any = {
           headless: true,
           args: [
             "--no-sandbox",
@@ -58,7 +82,11 @@ class BrowserService {
             "--no-zygote",
             "--single-process",
           ],
-        });
+        };
+        if (chromiumPath) {
+          launchOptions.executablePath = chromiumPath;
+        }
+        this.browser = await chromium.launch(launchOptions);
 
         this.browser.on("disconnected", () => {
           logger.warn("BrowserService: 浏览器已断开连接");
