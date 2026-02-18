@@ -41,12 +41,12 @@
     "semver": "^7.7.2",
     "uuid": "^9.0.1",
     "yaml": "^2.3.4",
-    "playwright-core": "^1.49.0"
+    "playwright-core": "^1.49.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.3.3"
   },
   "devDependencies": {
     "@types/lodash": "^4.14.202",
-    "@types/mime": "^3.0.4",
-    "tsup": "^8.0.2",
-    "typescript": "^5.3.3"
+    "@types/mime": "^3.0.4"
   }
 }

@@ -36,6 +36,6 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "vm"
-run = ["npm", "run", "start"]
-build = ["bash", "-c", "npm run build && npx playwright install chromium"]
+run = ["node", "--enable-source-maps", "--no-node-snapshot", "dist/index.js"]
+build = ["bash", "-c", "npm install && npx tsup src/index.ts --format cjs,esm --sourcemap --dts --clean --publicDir public && npx playwright install chromium"]
 publicDir = "dist"
