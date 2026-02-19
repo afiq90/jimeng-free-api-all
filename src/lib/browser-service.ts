@@ -77,7 +77,6 @@ class BrowserService {
       return this.browser;
     }
 
-    // 防止并发启动
     if (this.launching) {
       return this.launching;
     }
@@ -85,36 +84,57 @@ class BrowserService {
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
       logger.info(`BrowserService: 正在启动 Chromium 浏览器... (path: ${chromiumPath || "default"})`);
-      try {
-        const launchOptions: any = {
-          headless: true,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-zygote",
-            "--single-process",
-          ],
-        };
-        if (chromiumPath) {
-          launchOptions.executablePath = chromiumPath;
+
+      const maxAttempts = 3;
+      let lastError: Error | null = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const launchOptions: any = {
+            headless: true,
+            timeout: 60000,
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+              "--disable-gpu",
+              "--no-first-run",
+              "--disable-extensions",
+              "--disable-background-networking",
+              "--disable-sync",
+              "--disable-translate",
+              "--metrics-recording-only",
+              "--mute-audio",
+              "--no-default-browser-check",
+              "--js-flags=--max-old-space-size=256",
+            ],
+          };
+          if (chromiumPath) {
+            launchOptions.executablePath = chromiumPath;
+          }
+          this.browser = await chromium.launch(launchOptions);
+
+          this.browser.on("disconnected", () => {
+            logger.warn("BrowserService: 浏览器已断开连接");
+            this.browser = null;
+            this.sessions.clear();
+          });
+
+          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt})`);
+          return this.browser;
+        } catch (err) {
+          lastError = err as Error;
+          logger.error(`BrowserService: 启动失败 (attempt ${attempt}/${maxAttempts}): ${lastError.message}`);
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 2000 * attempt));
+          }
         }
-        this.browser = await chromium.launch(launchOptions);
-
-        this.browser.on("disconnected", () => {
-          logger.warn("BrowserService: 浏览器已断开连接");
-          this.browser = null;
-          this.sessions.clear();
-        });
-
-        logger.info("BrowserService: Chromium 浏览器启动成功");
-        return this.browser;
-      } finally {
-        this.launching = null;
       }
-    })();
+
+      throw lastError || new Error("浏览器启动失败");
+    })().finally(() => {
+      this.launching = null;
+    });
 
     return this.launching;
   }
@@ -147,86 +167,93 @@ class BrowserService {
    * 创建新的浏览器会话
    */
   private async createSession(token: string): Promise<BrowserSession> {
-    const browser = await this.ensureBrowser();
+    const maxAttempts = 2;
 
-    logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... 创建新会话`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const browser = await this.ensureBrowser();
 
-    const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-      viewport: { width: 1920, height: 1080 },
-      locale: "zh-CN",
-    });
+        logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... 创建新会话 (attempt ${attempt})`);
 
-    // 注入 cookies
-    const cookies = getCookiesForBrowser(token);
-    await context.addCookies(cookies);
+        const context = await browser.newContext({
+          userAgent:
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+          viewport: { width: 1920, height: 1080 },
+          locale: "zh-CN",
+        });
 
-    // 配置资源拦截
-    await context.route("**/*", (route) => {
-      const request = route.request();
-      const resourceType = request.resourceType();
-      const url = request.url();
+        const cookies = getCookiesForBrowser(token);
+        await context.addCookies(cookies);
 
-      // 屏蔽不需要的资源类型
-      if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
-        return route.abort();
-      }
+        await context.route("**/*", (route) => {
+          const request = route.request();
+          const resourceType = request.resourceType();
+          const url = request.url();
 
-      // 对于脚本资源，只允许白名单域名
-      if (resourceType === "script") {
-        const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some((domain) =>
-          url.includes(domain)
-        );
-        if (!isWhitelisted) {
-          return route.abort();
-        }
-      }
+          if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
+            return route.abort();
+          }
 
-      return route.continue();
-    });
+          if (resourceType === "script") {
+            const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some((domain) =>
+              url.includes(domain)
+            );
+            if (!isWhitelisted) {
+              return route.abort();
+            }
+          }
 
-    const page = await context.newPage();
+          return route.continue();
+        });
 
-    // 导航到即梦页面，让 bdms SDK 加载
-    logger.info("BrowserService: 正在导航到 jimeng.jianying.com ...");
-    await page.goto("https://jimeng.jianying.com", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
+        const page = await context.newPage();
 
-    // 等待 bdms SDK 就绪
-    logger.info("BrowserService: 等待 bdms SDK 就绪...");
-    try {
-      await page.waitForFunction(
-        () => {
-          // bdms SDK 会替换 window.fetch，检测其是否被替换
-          // 也可以检测 window.bdms 或 window.byted_acrawler
-          return (
-            (window as any).bdms?.init ||
-            (window as any).byted_acrawler ||
-            // 检测 fetch 是否被替换（bdms 会替换原生 fetch）
-            window.fetch.toString().indexOf("native code") === -1
+        logger.info("BrowserService: 正在导航到 jimeng.jianying.com ...");
+        await page.goto("https://jimeng.jianying.com", {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+
+        logger.info("BrowserService: 等待 bdms SDK 就绪...");
+        try {
+          await page.waitForFunction(
+            () => {
+              return (
+                (window as any).bdms?.init ||
+                (window as any).byted_acrawler ||
+                window.fetch.toString().indexOf("native code") === -1
+              );
+            },
+            { timeout: BDMS_READY_TIMEOUT }
           );
-        },
-        { timeout: BDMS_READY_TIMEOUT }
-      );
-      logger.info("BrowserService: bdms SDK 已就绪");
-    } catch (err) {
-      logger.warn(
-        "BrowserService: bdms SDK 等待超时，可能未完全加载，继续尝试..."
-      );
+          logger.info("BrowserService: bdms SDK 已就绪");
+        } catch (err) {
+          logger.warn(
+            "BrowserService: bdms SDK 等待超时，可能未完全加载，继续尝试..."
+          );
+        }
+
+        const session: BrowserSession = {
+          context,
+          page,
+          lastUsed: Date.now(),
+          idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT),
+        };
+
+        this.sessions.set(token, session);
+        return session;
+      } catch (err) {
+        logger.error(`BrowserService: 会话创建失败 (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
+        this.browser = null;
+        this.sessions.clear();
+        if (attempt >= maxAttempts) {
+          throw err;
+        }
+        await new Promise(r => setTimeout(r, 3000));
+      }
     }
 
-    const session: BrowserSession = {
-      context,
-      page,
-      lastUsed: Date.now(),
-      idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT),
-    };
-
-    this.sessions.set(token, session);
-    return session;
+    throw new Error("会话创建失败");
   }
 
   /**

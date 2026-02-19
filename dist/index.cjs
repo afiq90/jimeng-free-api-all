@@ -984,34 +984,37 @@ async function getTokenLiveStatus(refreshToken) {
 }
 
 // src/lib/browser-service.ts
+var cachedChromiumPath = null;
 function findChromiumPath() {
+  if (cachedChromiumPath) {
+    return cachedChromiumPath;
+  }
   if (process.env.CHROMIUM_PATH && import_fs.default.existsSync(process.env.CHROMIUM_PATH)) {
-    return process.env.CHROMIUM_PATH;
+    cachedChromiumPath = process.env.CHROMIUM_PATH;
+    return cachedChromiumPath;
   }
   try {
     const whichPath = (0, import_child_process.execSync)("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
     if (whichPath && import_fs.default.existsSync(whichPath)) {
-      return whichPath;
+      cachedChromiumPath = whichPath;
+      return cachedChromiumPath;
     }
   } catch {
   }
   try {
     const nixChrome = (0, import_child_process.execSync)("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
     if (nixChrome && import_fs.default.existsSync(nixChrome)) {
-      return nixChrome;
-    }
-  } catch {
-  }
-  try {
-    const nixPlaywright = (0, import_child_process.execSync)("find /nix/store -maxdepth 4 -path '*/chrome-linux/chrome' -type f 2>/dev/null | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
-    if (nixPlaywright && import_fs.default.existsSync(nixPlaywright)) {
-      return nixPlaywright;
+      cachedChromiumPath = nixChrome;
+      return cachedChromiumPath;
     }
   } catch {
   }
   const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
   for (const p of fallbacks) {
-    if (import_fs.default.existsSync(p)) return p;
+    if (import_fs.default.existsSync(p)) {
+      cachedChromiumPath = p;
+      return cachedChromiumPath;
+    }
   }
   return "";
 }
@@ -1042,34 +1045,52 @@ var BrowserService = class {
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
       logger_default.info(`BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668... (path: ${chromiumPath || "default"})`);
-      try {
-        const launchOptions = {
-          headless: true,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-zygote",
-            "--single-process"
-          ]
-        };
-        if (chromiumPath) {
-          launchOptions.executablePath = chromiumPath;
+      const maxAttempts = 3;
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const launchOptions = {
+            headless: true,
+            timeout: 6e4,
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+              "--disable-gpu",
+              "--no-first-run",
+              "--disable-extensions",
+              "--disable-background-networking",
+              "--disable-sync",
+              "--disable-translate",
+              "--metrics-recording-only",
+              "--mute-audio",
+              "--no-default-browser-check",
+              "--js-flags=--max-old-space-size=256"
+            ]
+          };
+          if (chromiumPath) {
+            launchOptions.executablePath = chromiumPath;
+          }
+          this.browser = await import_playwright_core.chromium.launch(launchOptions);
+          this.browser.on("disconnected", () => {
+            logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
+            this.browser = null;
+            this.sessions.clear();
+          });
+          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt})`);
+          return this.browser;
+        } catch (err) {
+          lastError = err;
+          logger_default.error(`BrowserService: \u542F\u52A8\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${lastError.message}`);
+          if (attempt < maxAttempts) {
+            await new Promise((r) => setTimeout(r, 2e3 * attempt));
+          }
         }
-        this.browser = await import_playwright_core.chromium.launch(launchOptions);
-        this.browser.on("disconnected", () => {
-          logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
-          this.browser = null;
-          this.sessions.clear();
-        });
-        logger_default.info("BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F");
-        return this.browser;
-      } finally {
-        this.launching = null;
       }
-    })();
+      throw lastError || new Error("\u6D4F\u89C8\u5668\u542F\u52A8\u5931\u8D25");
+    })().finally(() => {
+      this.launching = null;
+    });
     return this.launching;
   }
   /**
@@ -1078,12 +1099,20 @@ var BrowserService = class {
   async getSession(token) {
     const existing = this.sessions.get(token);
     if (existing) {
-      existing.lastUsed = Date.now();
-      if (existing.idleTimer) {
-        clearTimeout(existing.idleTimer);
+      try {
+        if (!existing.page.isClosed()) {
+          existing.lastUsed = Date.now();
+          if (existing.idleTimer) {
+            clearTimeout(existing.idleTimer);
+          }
+          existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
+          return existing;
+        }
+      } catch {
       }
-      existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
-      return existing;
+      logger_default.info(`BrowserService: \u4F1A\u8BDD ${token.substring(0, 8)}... \u5DF2\u5931\u6548\uFF0C\u91CD\u65B0\u521B\u5EFA`);
+      this.sessions.delete(token);
+      if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
     return this.createSession(token);
   }
@@ -1091,62 +1120,75 @@ var BrowserService = class {
    * 创建新的浏览器会话
    */
   async createSession(token) {
-    const browser = await this.ensureBrowser();
-    logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... \u521B\u5EFA\u65B0\u4F1A\u8BDD`);
-    const context = await browser.newContext({
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-      viewport: { width: 1920, height: 1080 },
-      locale: "zh-CN"
-    });
-    const cookies = getCookiesForBrowser(token);
-    await context.addCookies(cookies);
-    await context.route("**/*", (route) => {
-      const request2 = route.request();
-      const resourceType = request2.resourceType();
-      const url = request2.url();
-      if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
-        return route.abort();
-      }
-      if (resourceType === "script") {
-        const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some(
-          (domain) => url.includes(domain)
-        );
-        if (!isWhitelisted) {
-          return route.abort();
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const browser = await this.ensureBrowser();
+        logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... \u521B\u5EFA\u65B0\u4F1A\u8BDD (attempt ${attempt})`);
+        const context = await browser.newContext({
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+          viewport: { width: 1920, height: 1080 },
+          locale: "zh-CN"
+        });
+        const cookies = getCookiesForBrowser(token);
+        await context.addCookies(cookies);
+        await context.route("**/*", (route) => {
+          const request2 = route.request();
+          const resourceType = request2.resourceType();
+          const url = request2.url();
+          if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
+            return route.abort();
+          }
+          if (resourceType === "script") {
+            const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some(
+              (domain) => url.includes(domain)
+            );
+            if (!isWhitelisted) {
+              return route.abort();
+            }
+          }
+          return route.continue();
+        });
+        const page = await context.newPage();
+        logger_default.info("BrowserService: \u6B63\u5728\u5BFC\u822A\u5230 jimeng.jianying.com ...");
+        await page.goto("https://jimeng.jianying.com", {
+          waitUntil: "domcontentloaded",
+          timeout: 3e4
+        });
+        logger_default.info("BrowserService: \u7B49\u5F85 bdms SDK \u5C31\u7EEA...");
+        try {
+          await page.waitForFunction(
+            () => {
+              var _a;
+              return ((_a = window.bdms) == null ? void 0 : _a.init) || window.byted_acrawler || window.fetch.toString().indexOf("native code") === -1;
+            },
+            { timeout: BDMS_READY_TIMEOUT }
+          );
+          logger_default.info("BrowserService: bdms SDK \u5DF2\u5C31\u7EEA");
+        } catch (err) {
+          logger_default.warn(
+            "BrowserService: bdms SDK \u7B49\u5F85\u8D85\u65F6\uFF0C\u53EF\u80FD\u672A\u5B8C\u5168\u52A0\u8F7D\uFF0C\u7EE7\u7EED\u5C1D\u8BD5..."
+          );
         }
+        const session = {
+          context,
+          page,
+          lastUsed: Date.now(),
+          idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT)
+        };
+        this.sessions.set(token, session);
+        return session;
+      } catch (err) {
+        logger_default.error(`BrowserService: \u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${err.message}`);
+        this.browser = null;
+        this.sessions.clear();
+        if (attempt >= maxAttempts) {
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 3e3));
       }
-      return route.continue();
-    });
-    const page = await context.newPage();
-    logger_default.info("BrowserService: \u6B63\u5728\u5BFC\u822A\u5230 jimeng.jianying.com ...");
-    await page.goto("https://jimeng.jianying.com", {
-      waitUntil: "domcontentloaded",
-      timeout: 3e4
-    });
-    logger_default.info("BrowserService: \u7B49\u5F85 bdms SDK \u5C31\u7EEA...");
-    try {
-      await page.waitForFunction(
-        () => {
-          var _a;
-          return ((_a = window.bdms) == null ? void 0 : _a.init) || window.byted_acrawler || // 检测 fetch 是否被替换（bdms 会替换原生 fetch）
-          window.fetch.toString().indexOf("native code") === -1;
-        },
-        { timeout: BDMS_READY_TIMEOUT }
-      );
-      logger_default.info("BrowserService: bdms SDK \u5DF2\u5C31\u7EEA");
-    } catch (err) {
-      logger_default.warn(
-        "BrowserService: bdms SDK \u7B49\u5F85\u8D85\u65F6\uFF0C\u53EF\u80FD\u672A\u5B8C\u5168\u52A0\u8F7D\uFF0C\u7EE7\u7EED\u5C1D\u8BD5..."
-      );
     }
-    const session = {
-      context,
-      page,
-      lastUsed: Date.now(),
-      idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT)
-    };
-    this.sessions.set(token, session);
-    return session;
+    throw new Error("\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25");
   }
   /**
    * 关闭指定 token 的会话
