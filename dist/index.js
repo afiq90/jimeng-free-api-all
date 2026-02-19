@@ -676,6 +676,7 @@ var logger_default = new Logger();
 // src/lib/browser-service.ts
 import { chromium } from "playwright-core";
 import { execSync } from "child_process";
+import fs6 from "fs";
 
 // src/api/controllers/core.ts
 import _7 from "lodash";
@@ -960,25 +961,33 @@ async function getTokenLiveStatus(refreshToken) {
 
 // src/lib/browser-service.ts
 function findChromiumPath() {
-  const paths = [
-    process.env.CHROMIUM_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome"
-  ];
+  if (process.env.CHROMIUM_PATH && fs6.existsSync(process.env.CHROMIUM_PATH)) {
+    return process.env.CHROMIUM_PATH;
+  }
   try {
     const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
-    if (whichPath) paths.unshift(whichPath);
+    if (whichPath && fs6.existsSync(whichPath)) {
+      return whichPath;
+    }
   } catch {
   }
-  for (const p of paths) {
-    if (p) {
-      try {
-        execSync(`test -f "${p}"`, { stdio: "ignore" });
-        return p;
-      } catch {
-      }
+  try {
+    const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
+    if (nixChrome && fs6.existsSync(nixChrome)) {
+      return nixChrome;
     }
+  } catch {
+  }
+  try {
+    const nixPlaywright = execSync("find /nix/store -maxdepth 4 -path '*/chrome-linux/chrome' -type f 2>/dev/null | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
+    if (nixPlaywright && fs6.existsSync(nixPlaywright)) {
+      return nixPlaywright;
+    }
+  } catch {
+  }
+  const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
+  for (const p of fallbacks) {
+    if (fs6.existsSync(p)) return p;
   }
   return "";
 }
@@ -1609,10 +1618,10 @@ var Server = class {
 var server_default = new Server();
 
 // src/api/routes/index.ts
-import fs8 from "fs-extra";
+import fs9 from "fs-extra";
 
 // src/api/routes/images.ts
-import fs6 from "fs";
+import fs7 from "fs";
 import _13 from "lodash";
 
 // src/api/controllers/images.ts
@@ -3205,7 +3214,7 @@ var images_default = {
         if (imageFiles.length > 10) {
           throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
         }
-        images = imageFiles.map((file) => fs6.readFileSync(file.filepath));
+        images = imageFiles.map((file) => fs7.readFileSync(file.filepath));
       } else {
         const bodyImages = request2.body.images;
         if (!bodyImages || bodyImages.length === 0) {
@@ -3272,7 +3281,7 @@ import { PassThrough } from "stream";
 
 // src/api/controllers/videos.ts
 import crypto3 from "crypto";
-import fs7 from "fs";
+import fs8 from "fs";
 var DEFAULT_ASSISTANT_ID3 = 513695;
 var DEFAULT_MODEL2 = "jimeng-video-3.0";
 var DEFAULT_DRAFT_VERSION = "3.2.8";
@@ -3793,7 +3802,7 @@ async function generateVideo(_model, prompt, {
       }
       try {
         logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
-        const buffer = fs7.readFileSync(file.filepath);
+        const buffer = fs8.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
@@ -4162,7 +4171,7 @@ async function generateSeedanceVideo(_model, prompt, {
       }
       try {
         logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
-        const buffer = fs7.readFileSync(file.filepath);
+        const buffer = fs8.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadedImages.push({ uri: imageUri, width, height });
@@ -5220,7 +5229,7 @@ var routes_default = [
   {
     get: {
       "/": async () => {
-        const content = await fs8.readFile("public/welcome.html");
+        const content = await fs9.readFile("public/welcome.html");
         return new Response(content, {
           type: "html",
           headers: {

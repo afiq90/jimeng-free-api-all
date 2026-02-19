@@ -1,26 +1,35 @@
 import { chromium, Browser, BrowserContext, Page } from "playwright-core";
 import { execSync } from "child_process";
+import fs from "fs";
+import path from "path";
 import logger from "@/lib/logger.ts";
 import { getCookiesForBrowser } from "@/api/controllers/core.ts";
 
 function findChromiumPath(): string {
-  const paths = [
-    process.env.CHROMIUM_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-  ];
+  if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) {
+    return process.env.CHROMIUM_PATH;
+  }
   try {
     const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
-    if (whichPath) paths.unshift(whichPath);
-  } catch {}
-  for (const p of paths) {
-    if (p) {
-      try {
-        execSync(`test -f "${p}"`, { stdio: "ignore" });
-        return p;
-      } catch {}
+    if (whichPath && fs.existsSync(whichPath)) {
+      return whichPath;
     }
+  } catch {}
+  try {
+    const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
+    if (nixChrome && fs.existsSync(nixChrome)) {
+      return nixChrome;
+    }
+  } catch {}
+  try {
+    const nixPlaywright = execSync("find /nix/store -maxdepth 4 -path '*/chrome-linux/chrome' -type f 2>/dev/null | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
+    if (nixPlaywright && fs.existsSync(nixPlaywright)) {
+      return nixPlaywright;
+    }
+  } catch {}
+  const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
+  for (const p of fallbacks) {
+    if (fs.existsSync(p)) return p;
   }
   return "";
 }

@@ -700,6 +700,7 @@ var logger_default = new Logger();
 // src/lib/browser-service.ts
 var import_playwright_core = require("playwright-core");
 var import_child_process = require("child_process");
+var import_fs = __toESM(require("fs"), 1);
 
 // src/api/controllers/core.ts
 var import_lodash7 = __toESM(require("lodash"), 1);
@@ -984,25 +985,33 @@ async function getTokenLiveStatus(refreshToken) {
 
 // src/lib/browser-service.ts
 function findChromiumPath() {
-  const paths = [
-    process.env.CHROMIUM_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome"
-  ];
+  if (process.env.CHROMIUM_PATH && import_fs.default.existsSync(process.env.CHROMIUM_PATH)) {
+    return process.env.CHROMIUM_PATH;
+  }
   try {
     const whichPath = (0, import_child_process.execSync)("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
-    if (whichPath) paths.unshift(whichPath);
+    if (whichPath && import_fs.default.existsSync(whichPath)) {
+      return whichPath;
+    }
   } catch {
   }
-  for (const p of paths) {
-    if (p) {
-      try {
-        (0, import_child_process.execSync)(`test -f "${p}"`, { stdio: "ignore" });
-        return p;
-      } catch {
-      }
+  try {
+    const nixChrome = (0, import_child_process.execSync)("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
+    if (nixChrome && import_fs.default.existsSync(nixChrome)) {
+      return nixChrome;
     }
+  } catch {
+  }
+  try {
+    const nixPlaywright = (0, import_child_process.execSync)("find /nix/store -maxdepth 4 -path '*/chrome-linux/chrome' -type f 2>/dev/null | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
+    if (nixPlaywright && import_fs.default.existsSync(nixPlaywright)) {
+      return nixPlaywright;
+    }
+  } catch {
+  }
+  const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
+  for (const p of fallbacks) {
+    if (import_fs.default.existsSync(p)) return p;
   }
   return "";
 }
@@ -1636,7 +1645,7 @@ var server_default = new Server();
 var import_fs_extra6 = __toESM(require("fs-extra"), 1);
 
 // src/api/routes/images.ts
-var import_fs = __toESM(require("fs"), 1);
+var import_fs2 = __toESM(require("fs"), 1);
 var import_lodash13 = __toESM(require("lodash"), 1);
 
 // src/api/controllers/images.ts
@@ -3229,7 +3238,7 @@ var images_default = {
         if (imageFiles.length > 10) {
           throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
         }
-        images = imageFiles.map((file) => import_fs.default.readFileSync(file.filepath));
+        images = imageFiles.map((file) => import_fs2.default.readFileSync(file.filepath));
       } else {
         const bodyImages = request2.body.images;
         if (!bodyImages || bodyImages.length === 0) {
@@ -3296,7 +3305,7 @@ var import_stream2 = require("stream");
 
 // src/api/controllers/videos.ts
 var import_crypto3 = __toESM(require("crypto"), 1);
-var import_fs2 = __toESM(require("fs"), 1);
+var import_fs3 = __toESM(require("fs"), 1);
 var DEFAULT_ASSISTANT_ID3 = 513695;
 var DEFAULT_MODEL2 = "jimeng-video-3.0";
 var DEFAULT_DRAFT_VERSION = "3.2.8";
@@ -3817,7 +3826,7 @@ async function generateVideo(_model, prompt, {
       }
       try {
         logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
-        const buffer = import_fs2.default.readFileSync(file.filepath);
+        const buffer = import_fs3.default.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
@@ -4186,7 +4195,7 @@ async function generateSeedanceVideo(_model, prompt, {
       }
       try {
         logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
-        const buffer = import_fs2.default.readFileSync(file.filepath);
+        const buffer = import_fs3.default.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadedImages.push({ uri: imageUri, width, height });
