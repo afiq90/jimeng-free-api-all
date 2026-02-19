@@ -5,31 +5,37 @@ import path from "path";
 import logger from "@/lib/logger.ts";
 import { getCookiesForBrowser } from "@/api/controllers/core.ts";
 
+let cachedChromiumPath: string | null = null;
+
 function findChromiumPath(): string {
+  if (cachedChromiumPath) {
+    return cachedChromiumPath;
+  }
+
   if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) {
-    return process.env.CHROMIUM_PATH;
+    cachedChromiumPath = process.env.CHROMIUM_PATH;
+    return cachedChromiumPath;
   }
   try {
     const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
     if (whichPath && fs.existsSync(whichPath)) {
-      return whichPath;
+      cachedChromiumPath = whichPath;
+      return cachedChromiumPath;
     }
   } catch {}
   try {
     const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
     if (nixChrome && fs.existsSync(nixChrome)) {
-      return nixChrome;
-    }
-  } catch {}
-  try {
-    const nixPlaywright = execSync("find /nix/store -maxdepth 4 -path '*/chrome-linux/chrome' -type f 2>/dev/null | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
-    if (nixPlaywright && fs.existsSync(nixPlaywright)) {
-      return nixPlaywright;
+      cachedChromiumPath = nixChrome;
+      return cachedChromiumPath;
     }
   } catch {}
   const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
   for (const p of fallbacks) {
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      cachedChromiumPath = p;
+      return cachedChromiumPath;
+    }
   }
   return "";
 }
@@ -119,13 +125,19 @@ class BrowserService {
   private async getSession(token: string): Promise<BrowserSession> {
     const existing = this.sessions.get(token);
     if (existing) {
-      existing.lastUsed = Date.now();
-      // 重置空闲计时器
-      if (existing.idleTimer) {
-        clearTimeout(existing.idleTimer);
-      }
-      existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
-      return existing;
+      try {
+        if (!existing.page.isClosed()) {
+          existing.lastUsed = Date.now();
+          if (existing.idleTimer) {
+            clearTimeout(existing.idleTimer);
+          }
+          existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
+          return existing;
+        }
+      } catch {}
+      logger.info(`BrowserService: 会话 ${token.substring(0, 8)}... 已失效，重新创建`);
+      this.sessions.delete(token);
+      if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
 
     return this.createSession(token);
