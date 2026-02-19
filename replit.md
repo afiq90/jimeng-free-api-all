@@ -31,4 +31,14 @@ A free API server for jimeng (即梦) AI image/video generation service. Provide
 - `/token/*` - Token management
 
 ## Recent Changes
+- 2026-02-20: Optimized browser-service.ts for low-resource VM (0.5 vCPU / 2 GiB RAM):
+  - Increased Chromium launch timeout from 60s to 120s
+  - Added memory-saving Chromium flags (low-end-device-mode, reduced JS heap to 128MB, etc.)
+  - Safe PID-tracked process cleanup instead of broad pkill
+  - Exponential backoff on retries (5s, 10s, 15s)
+  - Memory diagnostics logging on launch/fail
+  - Background health check every 60s with memory-aware session eviction
+  - Session cap reduced to 2 with LRU eviction
+  - Idle timeout reduced from 10min to 5min
+  - Viewport reduced from 1920x1080 to 1280x720
 - 2026-02-18: Initial Replit setup, configured port to 5000, built and deployed
