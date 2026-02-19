@@ -701,6 +701,7 @@ var logger_default = new Logger();
 var import_playwright_core = require("playwright-core");
 var import_child_process = require("child_process");
 var import_fs = __toESM(require("fs"), 1);
+var import_os2 = __toESM(require("os"), 1);
 
 // src/api/controllers/core.ts
 var import_lodash7 = __toESM(require("lodash"), 1);
@@ -1018,6 +1019,23 @@ function findChromiumPath() {
   }
   return "";
 }
+var trackedBrowserPid = null;
+function killTrackedBrowserProcess() {
+  if (!trackedBrowserPid) return;
+  try {
+    (0, import_child_process.execSync)(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
+    (0, import_child_process.execSync)(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
+    logger_default.info(`BrowserService: \u5DF2\u6E05\u7406\u6B8B\u7559\u6D4F\u89C8\u5668\u8FDB\u7A0B (pid: ${trackedBrowserPid})`);
+  } catch {
+  }
+  trackedBrowserPid = null;
+}
+function getSystemMemoryInfo() {
+  const totalMB = Math.round(import_os2.default.totalmem() / 1024 / 1024);
+  const freeMB = Math.round(import_os2.default.freemem() / 1024 / 1024);
+  const usedPercent = Math.round((totalMB - freeMB) / totalMB * 100);
+  return { totalMB, freeMB, usedPercent };
+}
 var SCRIPT_WHITELIST_DOMAINS = [
   "vlabstatic.com",
   "bytescm.com",
@@ -1025,15 +1043,16 @@ var SCRIPT_WHITELIST_DOMAINS = [
   "byteimg.com"
 ];
 var BLOCKED_RESOURCE_TYPES = ["image", "font", "stylesheet", "media"];
-var SESSION_IDLE_TIMEOUT = 10 * 60 * 1e3;
+var SESSION_IDLE_TIMEOUT = 5 * 60 * 1e3;
 var BDMS_READY_TIMEOUT = 3e4;
+var BROWSER_LAUNCH_TIMEOUT = 12e4;
+var MAX_SESSIONS = 2;
+var HEALTH_CHECK_INTERVAL = 60 * 1e3;
 var BrowserService = class {
   browser = null;
   sessions = /* @__PURE__ */ new Map();
   launching = null;
-  /**
-   * 懒启动浏览器实例
-   */
+  healthCheckTimer = null;
   async ensureBrowser() {
     var _a;
     if ((_a = this.browser) == null ? void 0 : _a.isConnected()) {
@@ -1044,14 +1063,25 @@ var BrowserService = class {
     }
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
-      logger_default.info(`BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668... (path: ${chromiumPath || "default"})`);
+      const memInfo = getSystemMemoryInfo();
+      logger_default.info(`BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
+      if (memInfo.freeMB < 200) {
+        logger_default.warn(`BrowserService: \u53EF\u7528\u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB)\uFF0C\u5C1D\u8BD5\u6E05\u7406\u540E\u542F\u52A8...`);
+        killTrackedBrowserProcess();
+        await new Promise((r) => setTimeout(r, 2e3));
+      }
       const maxAttempts = 3;
       let lastError = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
+          if (attempt > 1) {
+            logger_default.info(`BrowserService: \u91CD\u8BD5\u524D\u6E05\u7406\u6B8B\u7559\u8FDB\u7A0B... (attempt ${attempt})`);
+            killTrackedBrowserProcess();
+            await new Promise((r) => setTimeout(r, 3e3));
+          }
           const launchOptions = {
             headless: true,
-            timeout: 6e4,
+            timeout: BROWSER_LAUNCH_TIMEOUT,
             args: [
               "--no-sandbox",
               "--disable-setuid-sandbox",
@@ -1065,25 +1095,52 @@ var BrowserService = class {
               "--metrics-recording-only",
               "--mute-audio",
               "--no-default-browser-check",
-              "--js-flags=--max-old-space-size=256"
+              "--js-flags=--max-old-space-size=128",
+              "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+              "--disable-hang-monitor",
+              "--disable-popup-blocking",
+              "--disable-prompt-on-repost",
+              "--disable-renderer-backgrounding",
+              "--disable-component-update",
+              "--disable-domain-reliability",
+              "--disable-client-side-phishing-detection",
+              "--disable-breakpad",
+              "--disable-software-rasterizer",
+              "--enable-low-end-device-mode",
+              "--disable-canvas-aa",
+              "--disable-2d-canvas-clip-aa"
             ]
           };
           if (chromiumPath) {
             launchOptions.executablePath = chromiumPath;
           }
           this.browser = await import_playwright_core.chromium.launch(launchOptions);
+          try {
+            const serverProcess = this.browser._browserProcess || this.browser._process;
+            if (serverProcess == null ? void 0 : serverProcess.pid) {
+              trackedBrowserPid = serverProcess.pid;
+              logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u8FDB\u7A0B PID: ${trackedBrowserPid}`);
+            }
+          } catch {
+          }
           this.browser.on("disconnected", () => {
             logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
             this.browser = null;
             this.sessions.clear();
+            trackedBrowserPid = null;
           });
-          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt})`);
+          const memAfter = getSystemMemoryInfo();
+          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          this.startHealthCheck();
           return this.browser;
         } catch (err) {
           lastError = err;
-          logger_default.error(`BrowserService: \u542F\u52A8\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${lastError.message}`);
+          const memErr = getSystemMemoryInfo();
+          logger_default.error(`BrowserService: \u542F\u52A8\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
           if (attempt < maxAttempts) {
-            await new Promise((r) => setTimeout(r, 2e3 * attempt));
+            const backoffMs = 5e3 * attempt;
+            logger_default.info(`BrowserService: \u7B49\u5F85 ${backoffMs / 1e3}s \u540E\u91CD\u8BD5...`);
+            await new Promise((r) => setTimeout(r, backoffMs));
           }
         }
       }
@@ -1093,9 +1150,57 @@ var BrowserService = class {
     });
     return this.launching;
   }
-  /**
-   * 获取或创建指定 token 的浏览器会话
-   */
+  startHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+    this.healthCheckTimer = setInterval(async () => {
+      var _a;
+      try {
+        if (!((_a = this.browser) == null ? void 0 : _a.isConnected())) {
+          logger_default.warn("BrowserService: \u5065\u5EB7\u68C0\u67E5\u53D1\u73B0\u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\uFF0C\u7B49\u5F85\u4E0B\u6B21\u8BF7\u6C42\u91CD\u5EFA...");
+          this.browser = null;
+          this.sessions.clear();
+          this.stopHealthCheck();
+          return;
+        }
+        const memInfo = getSystemMemoryInfo();
+        if (memInfo.freeMB < 200 && this.sessions.size > 0) {
+          const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
+          logger_default.warn(`BrowserService: \u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB free)\uFF0C\u6E05\u7406 ${evictCount} \u4E2A\u4F1A\u8BDD...`);
+          await this.evictOldestSessions(evictCount);
+        }
+        const now = Date.now();
+        for (const [token, session] of this.sessions) {
+          if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
+            logger_default.info(`BrowserService: \u5065\u5EB7\u68C0\u67E5\u6E05\u7406\u8FC7\u671F\u4F1A\u8BDD ${token.substring(0, 8)}...`);
+            await this.closeSession(token);
+          }
+        }
+      } catch (err) {
+        logger_default.error(`BrowserService: \u5065\u5EB7\u68C0\u67E5\u5F02\u5E38: ${err.message}`);
+      }
+    }, HEALTH_CHECK_INTERVAL);
+    if (this.healthCheckTimer.unref) {
+      this.healthCheckTimer.unref();
+    }
+  }
+  stopHealthCheck() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+  }
+  async evictOldestSessions(count) {
+    const sorted = [...this.sessions.entries()].sort(
+      (a, b) => a[1].lastUsed - b[1].lastUsed
+    );
+    for (let i = 0; i < Math.min(count, sorted.length); i++) {
+      const [token] = sorted[i];
+      logger_default.info(`BrowserService: \u9A71\u9010\u6700\u65E7\u4F1A\u8BDD ${token.substring(0, 8)}...`);
+      await this.closeSession(token);
+    }
+  }
   async getSession(token) {
     const existing = this.sessions.get(token);
     if (existing) {
@@ -1114,20 +1219,31 @@ var BrowserService = class {
       this.sessions.delete(token);
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
+    if (this.sessions.size >= MAX_SESSIONS) {
+      logger_default.warn(`BrowserService: \u4F1A\u8BDD\u6570\u8FBE\u5230\u4E0A\u9650 (${MAX_SESSIONS})\uFF0C\u9A71\u9010\u6700\u65E7\u4F1A\u8BDD...`);
+      await this.evictOldestSessions(1);
+    }
     return this.createSession(token);
   }
-  /**
-   * 创建新的浏览器会话
-   */
   async createSession(token) {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const browser = await this.ensureBrowser();
-        logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... \u521B\u5EFA\u65B0\u4F1A\u8BDD (attempt ${attempt})`);
+        const memInfo = getSystemMemoryInfo();
+        logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... \u521B\u5EFA\u65B0\u4F1A\u8BDD (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
+        if (memInfo.freeMB < 150 && this.sessions.size > 0) {
+          logger_default.warn(`BrowserService: \u53EF\u7528\u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB)\uFF0C\u9010\u6B65\u6E05\u7406\u4F1A\u8BDD...`);
+          while (this.sessions.size > 0) {
+            await this.evictOldestSessions(1);
+            const updated = getSystemMemoryInfo();
+            if (updated.freeMB >= 150) break;
+          }
+          await new Promise((r) => setTimeout(r, 1e3));
+        }
         const context = await browser.newContext({
           userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-          viewport: { width: 1920, height: 1080 },
+          viewport: { width: 1280, height: 720 },
           locale: "zh-CN"
         });
         const cookies = getCookiesForBrowser(token);
@@ -1153,7 +1269,7 @@ var BrowserService = class {
         logger_default.info("BrowserService: \u6B63\u5728\u5BFC\u822A\u5230 jimeng.jianying.com ...");
         await page.goto("https://jimeng.jianying.com", {
           waitUntil: "domcontentloaded",
-          timeout: 3e4
+          timeout: 45e3
         });
         logger_default.info("BrowserService: \u7B49\u5F85 bdms SDK \u5C31\u7EEA...");
         try {
@@ -1190,9 +1306,6 @@ var BrowserService = class {
     }
     throw new Error("\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25");
   }
-  /**
-   * 关闭指定 token 的会话
-   */
   async closeSession(token) {
     const session = this.sessions.get(token);
     if (!session) return;
@@ -1206,15 +1319,6 @@ var BrowserService = class {
     }
     this.sessions.delete(token);
   }
-  /**
-   * 通过浏览器代理发送 fetch 请求
-   * bdms SDK 会自动拦截 fetch 并注入 a_bogus 签名
-   *
-   * @param token sessionid
-   * @param url 完整的请求 URL
-   * @param options fetch 选项 (method, headers, body)
-   * @returns 解析后的 JSON 响应
-   */
   async fetch(token, url, options) {
     const session = await this.getSession(token);
     logger_default.info(`BrowserService: \u4EE3\u7406\u8BF7\u6C42 ${options.method || "GET"} ${url.substring(0, 100)}...`);
@@ -1255,11 +1359,9 @@ var BrowserService = class {
       throw err;
     }
   }
-  /**
-   * 关闭所有会话和浏览器实例
-   */
   async close() {
     logger_default.info("BrowserService: \u6B63\u5728\u5173\u95ED\u6240\u6709\u4F1A\u8BDD\u548C\u6D4F\u89C8\u5668...");
+    this.stopHealthCheck();
     for (const [token] of this.sessions) {
       await this.closeSession(token);
     }
@@ -1270,6 +1372,7 @@ var BrowserService = class {
       }
       this.browser = null;
     }
+    killTrackedBrowserProcess();
     logger_default.info("BrowserService: \u5DF2\u5173\u95ED");
   }
 };

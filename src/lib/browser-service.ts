@@ -1,7 +1,7 @@
 import { chromium, Browser, BrowserContext, Page } from "playwright-core";
 import { execSync } from "child_process";
 import fs from "fs";
-import path from "path";
+import os from "os";
 import logger from "@/lib/logger.ts";
 import { getCookiesForBrowser } from "@/api/controllers/core.ts";
 
@@ -40,7 +40,25 @@ function findChromiumPath(): string {
   return "";
 }
 
-// bdms SDK 相关脚本的白名单域名
+let trackedBrowserPid: number | null = null;
+
+function killTrackedBrowserProcess(): void {
+  if (!trackedBrowserPid) return;
+  try {
+    execSync(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
+    execSync(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
+    logger.info(`BrowserService: 已清理残留浏览器进程 (pid: ${trackedBrowserPid})`);
+  } catch {}
+  trackedBrowserPid = null;
+}
+
+function getSystemMemoryInfo(): { totalMB: number; freeMB: number; usedPercent: number } {
+  const totalMB = Math.round(os.totalmem() / 1024 / 1024);
+  const freeMB = Math.round(os.freemem() / 1024 / 1024);
+  const usedPercent = Math.round(((totalMB - freeMB) / totalMB) * 100);
+  return { totalMB, freeMB, usedPercent };
+}
+
 const SCRIPT_WHITELIST_DOMAINS = [
   "vlabstatic.com",
   "bytescm.com",
@@ -48,14 +66,17 @@ const SCRIPT_WHITELIST_DOMAINS = [
   "byteimg.com",
 ];
 
-// 需要屏蔽的资源类型（加速加载、减少内存）
 const BLOCKED_RESOURCE_TYPES = ["image", "font", "stylesheet", "media"];
 
-// 会话空闲超时时间（毫秒）
-const SESSION_IDLE_TIMEOUT = 10 * 60 * 1000;
+const SESSION_IDLE_TIMEOUT = 5 * 60 * 1000;
 
-// bdms SDK 就绪等待超时（毫秒）
 const BDMS_READY_TIMEOUT = 30000;
+
+const BROWSER_LAUNCH_TIMEOUT = 120000;
+
+const MAX_SESSIONS = 2;
+
+const HEALTH_CHECK_INTERVAL = 60 * 1000;
 
 interface BrowserSession {
   context: BrowserContext;
@@ -68,10 +89,8 @@ class BrowserService {
   private browser: Browser | null = null;
   private sessions: Map<string, BrowserSession> = new Map();
   private launching: Promise<Browser> | null = null;
+  private healthCheckTimer: NodeJS.Timeout | null = null;
 
-  /**
-   * 懒启动浏览器实例
-   */
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser?.isConnected()) {
       return this.browser;
@@ -83,16 +102,29 @@ class BrowserService {
 
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
-      logger.info(`BrowserService: 正在启动 Chromium 浏览器... (path: ${chromiumPath || "default"})`);
+      const memInfo = getSystemMemoryInfo();
+      logger.info(`BrowserService: 正在启动 Chromium 浏览器... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
+
+      if (memInfo.freeMB < 200) {
+        logger.warn(`BrowserService: 可用内存不足 (${memInfo.freeMB}MB)，尝试清理后启动...`);
+        killTrackedBrowserProcess();
+        await new Promise(r => setTimeout(r, 2000));
+      }
 
       const maxAttempts = 3;
       let lastError: Error | null = null;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
+          if (attempt > 1) {
+            logger.info(`BrowserService: 重试前清理残留进程... (attempt ${attempt})`);
+            killTrackedBrowserProcess();
+            await new Promise(r => setTimeout(r, 3000));
+          }
+
           const launchOptions: any = {
             headless: true,
-            timeout: 60000,
+            timeout: BROWSER_LAUNCH_TIMEOUT,
             args: [
               "--no-sandbox",
               "--disable-setuid-sandbox",
@@ -106,7 +138,20 @@ class BrowserService {
               "--metrics-recording-only",
               "--mute-audio",
               "--no-default-browser-check",
-              "--js-flags=--max-old-space-size=256",
+              "--js-flags=--max-old-space-size=128",
+              "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+              "--disable-hang-monitor",
+              "--disable-popup-blocking",
+              "--disable-prompt-on-repost",
+              "--disable-renderer-backgrounding",
+              "--disable-component-update",
+              "--disable-domain-reliability",
+              "--disable-client-side-phishing-detection",
+              "--disable-breakpad",
+              "--disable-software-rasterizer",
+              "--enable-low-end-device-mode",
+              "--disable-canvas-aa",
+              "--disable-2d-canvas-clip-aa",
             ],
           };
           if (chromiumPath) {
@@ -114,19 +159,35 @@ class BrowserService {
           }
           this.browser = await chromium.launch(launchOptions);
 
+          try {
+            const serverProcess = (this.browser as any)._browserProcess || (this.browser as any)._process;
+            if (serverProcess?.pid) {
+              trackedBrowserPid = serverProcess.pid;
+              logger.info(`BrowserService: 浏览器进程 PID: ${trackedBrowserPid}`);
+            }
+          } catch {}
+
           this.browser.on("disconnected", () => {
             logger.warn("BrowserService: 浏览器已断开连接");
             this.browser = null;
             this.sessions.clear();
+            trackedBrowserPid = null;
           });
 
-          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt})`);
+          const memAfter = getSystemMemoryInfo();
+          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+
+          this.startHealthCheck();
+
           return this.browser;
         } catch (err) {
           lastError = err as Error;
-          logger.error(`BrowserService: 启动失败 (attempt ${attempt}/${maxAttempts}): ${lastError.message}`);
+          const memErr = getSystemMemoryInfo();
+          logger.error(`BrowserService: 启动失败 (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
           if (attempt < maxAttempts) {
-            await new Promise(r => setTimeout(r, 2000 * attempt));
+            const backoffMs = 5000 * attempt;
+            logger.info(`BrowserService: 等待 ${backoffMs / 1000}s 后重试...`);
+            await new Promise(r => setTimeout(r, backoffMs));
           }
         }
       }
@@ -139,9 +200,63 @@ class BrowserService {
     return this.launching;
   }
 
-  /**
-   * 获取或创建指定 token 的浏览器会话
-   */
+  private startHealthCheck(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+
+    this.healthCheckTimer = setInterval(async () => {
+      try {
+        if (!this.browser?.isConnected()) {
+          logger.warn("BrowserService: 健康检查发现浏览器已断开，等待下次请求重建...");
+          this.browser = null;
+          this.sessions.clear();
+          this.stopHealthCheck();
+          return;
+        }
+
+        const memInfo = getSystemMemoryInfo();
+        if (memInfo.freeMB < 200 && this.sessions.size > 0) {
+          const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
+          logger.warn(`BrowserService: 内存不足 (${memInfo.freeMB}MB free)，清理 ${evictCount} 个会话...`);
+          await this.evictOldestSessions(evictCount);
+        }
+
+        const now = Date.now();
+        for (const [token, session] of this.sessions) {
+          if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
+            logger.info(`BrowserService: 健康检查清理过期会话 ${token.substring(0, 8)}...`);
+            await this.closeSession(token);
+          }
+        }
+      } catch (err) {
+        logger.error(`BrowserService: 健康检查异常: ${(err as Error).message}`);
+      }
+    }, HEALTH_CHECK_INTERVAL);
+
+    if (this.healthCheckTimer.unref) {
+      this.healthCheckTimer.unref();
+    }
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+  }
+
+  private async evictOldestSessions(count: number): Promise<void> {
+    const sorted = [...this.sessions.entries()].sort(
+      (a, b) => a[1].lastUsed - b[1].lastUsed
+    );
+    for (let i = 0; i < Math.min(count, sorted.length); i++) {
+      const [token] = sorted[i];
+      logger.info(`BrowserService: 驱逐最旧会话 ${token.substring(0, 8)}...`);
+      await this.closeSession(token);
+    }
+  }
+
   private async getSession(token: string): Promise<BrowserSession> {
     const existing = this.sessions.get(token);
     if (existing) {
@@ -160,12 +275,14 @@ class BrowserService {
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
 
+    if (this.sessions.size >= MAX_SESSIONS) {
+      logger.warn(`BrowserService: 会话数达到上限 (${MAX_SESSIONS})，驱逐最旧会话...`);
+      await this.evictOldestSessions(1);
+    }
+
     return this.createSession(token);
   }
 
-  /**
-   * 创建新的浏览器会话
-   */
   private async createSession(token: string): Promise<BrowserSession> {
     const maxAttempts = 2;
 
@@ -173,12 +290,23 @@ class BrowserService {
       try {
         const browser = await this.ensureBrowser();
 
-        logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... 创建新会话 (attempt ${attempt})`);
+        const memInfo = getSystemMemoryInfo();
+        logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... 创建新会话 (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
+
+        if (memInfo.freeMB < 150 && this.sessions.size > 0) {
+          logger.warn(`BrowserService: 可用内存不足 (${memInfo.freeMB}MB)，逐步清理会话...`);
+          while (this.sessions.size > 0) {
+            await this.evictOldestSessions(1);
+            const updated = getSystemMemoryInfo();
+            if (updated.freeMB >= 150) break;
+          }
+          await new Promise(r => setTimeout(r, 1000));
+        }
 
         const context = await browser.newContext({
           userAgent:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-          viewport: { width: 1920, height: 1080 },
+          viewport: { width: 1280, height: 720 },
           locale: "zh-CN",
         });
 
@@ -211,7 +339,7 @@ class BrowserService {
         logger.info("BrowserService: 正在导航到 jimeng.jianying.com ...");
         await page.goto("https://jimeng.jianying.com", {
           waitUntil: "domcontentloaded",
-          timeout: 30000,
+          timeout: 45000,
         });
 
         logger.info("BrowserService: 等待 bdms SDK 就绪...");
@@ -256,9 +384,6 @@ class BrowserService {
     throw new Error("会话创建失败");
   }
 
-  /**
-   * 关闭指定 token 的会话
-   */
   private async closeSession(token: string) {
     const session = this.sessions.get(token);
     if (!session) return;
@@ -271,21 +396,11 @@ class BrowserService {
     try {
       await session.context.close();
     } catch (err) {
-      // 忽略关闭错误
     }
 
     this.sessions.delete(token);
   }
 
-  /**
-   * 通过浏览器代理发送 fetch 请求
-   * bdms SDK 会自动拦截 fetch 并注入 a_bogus 签名
-   *
-   * @param token sessionid
-   * @param url 完整的请求 URL
-   * @param options fetch 选项 (method, headers, body)
-   * @returns 解析后的 JSON 响应
-   */
   async fetch(
     token: string,
     url: string,
@@ -330,18 +445,16 @@ class BrowserService {
         return result.text;
       }
     } catch (err) {
-      // 如果执行失败（页面崩溃等），清理会话以便下次重建
       logger.error(`BrowserService: 请求执行失败: ${(err as Error).message}`);
       await this.closeSession(token);
       throw err;
     }
   }
 
-  /**
-   * 关闭所有会话和浏览器实例
-   */
   async close() {
     logger.info("BrowserService: 正在关闭所有会话和浏览器...");
+
+    this.stopHealthCheck();
 
     for (const [token] of this.sessions) {
       await this.closeSession(token);
@@ -351,15 +464,15 @@ class BrowserService {
       try {
         await this.browser.close();
       } catch (err) {
-        // 忽略关闭错误
       }
       this.browser = null;
     }
+
+    killTrackedBrowserProcess();
 
     logger.info("BrowserService: 已关闭");
   }
 }
 
-// 单例导出
 const browserService = new BrowserService();
 export default browserService;
