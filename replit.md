@@ -31,6 +31,14 @@ A free API server for jimeng (即梦) AI image/video generation service. Provide
 - `/token/*` - Token management
 
 ## Recent Changes
+- 2026-02-20: Hardened browser-service.ts to fix browser disconnect → client hang issue:
+  - Proactive background reconnect: browser relaunches immediately on disconnect instead of lazy rebuild
+  - Circuit breaker pattern: after 3 consecutive failures (launch, session, or fetch), fast-fails with 503 for 60s cooldown
+  - Bounded fetch timeout (30s): prevents client-side RemoteDisconnected by racing a timeout against the full fetch flow
+  - Timeout cleanup: sessions are closed on timeout to prevent resource leaks
+  - In-browser AbortController: fetch inside Playwright page auto-aborts at 25s
+  - Circuit breaker covers all failure paths: browser launch, session creation, and fetch execution
+  - Enhanced logging: browser uptime, restart count, circuit breaker state
 - 2026-02-20: Optimized browser-service.ts for low-resource VM (0.5 vCPU / 2 GiB RAM):
   - Increased Chromium launch timeout from 60s to 120s
   - Added memory-saving Chromium flags (low-end-device-mode, reduced JS heap to 128MB, etc.)

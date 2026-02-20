@@ -78,6 +78,13 @@ const MAX_SESSIONS = 2;
 
 const HEALTH_CHECK_INTERVAL = 60 * 1000;
 
+const FETCH_TIMEOUT = 30000;
+
+const CIRCUIT_BREAKER_THRESHOLD = 3;
+const CIRCUIT_BREAKER_COOLDOWN = 60 * 1000;
+
+const PROACTIVE_RECONNECT_DELAY = 2000;
+
 interface BrowserSession {
   context: BrowserContext;
   page: Page;
@@ -91,9 +98,72 @@ class BrowserService {
   private launching: Promise<Browser> | null = null;
   private healthCheckTimer: NodeJS.Timeout | null = null;
 
+  private consecutiveFailures: number = 0;
+  private lastFailureTime: number = 0;
+  private browserStartCount: number = 0;
+  private browserStartTime: number = 0;
+
+  private isReady(): boolean {
+    return this.browser !== null && this.browser.isConnected();
+  }
+
+  private isCircuitOpen(): boolean {
+    if (this.consecutiveFailures < CIRCUIT_BREAKER_THRESHOLD) {
+      return false;
+    }
+    const elapsed = Date.now() - this.lastFailureTime;
+    if (elapsed > CIRCUIT_BREAKER_COOLDOWN) {
+      logger.info(`BrowserService: 熔断器冷却完毕 (${Math.round(elapsed / 1000)}s elapsed)，允许重试`);
+      this.consecutiveFailures = 0;
+      return false;
+    }
+    return true;
+  }
+
+  private recordFailure(): void {
+    this.consecutiveFailures++;
+    this.lastFailureTime = Date.now();
+    logger.warn(`BrowserService: 连续失败次数: ${this.consecutiveFailures}/${CIRCUIT_BREAKER_THRESHOLD}`);
+  }
+
+  private recordSuccess(): void {
+    if (this.consecutiveFailures > 0) {
+      logger.info(`BrowserService: 恢复成功，重置熔断器 (之前连续失败 ${this.consecutiveFailures} 次)`);
+    }
+    this.consecutiveFailures = 0;
+  }
+
+  private proactiveReconnect(): void {
+    if (this.launching) {
+      return;
+    }
+    if (this.isCircuitOpen()) {
+      logger.warn(`BrowserService: 熔断器打开，跳过主动重连 (冷却 ${Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1000)}s)`);
+      return;
+    }
+
+    logger.info(`BrowserService: 启动主动后台重连 (${PROACTIVE_RECONNECT_DELAY}ms 后)...`);
+    setTimeout(() => {
+      if (this.isReady() || this.launching) {
+        return;
+      }
+      logger.info(`BrowserService: 执行主动后台重连...`);
+      this.ensureBrowser().then(() => {
+        logger.info(`BrowserService: 主动后台重连成功`);
+      }).catch((err) => {
+        logger.error(`BrowserService: 主动后台重连失败: ${(err as Error).message}`);
+      });
+    }, PROACTIVE_RECONNECT_DELAY);
+  }
+
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser?.isConnected()) {
       return this.browser;
+    }
+
+    if (this.isCircuitOpen()) {
+      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1000);
+      throw new Error(`BrowserService: 熔断器打开，浏览器暂时不可用，请 ${remainingCooldown}s 后重试`);
     }
 
     if (this.launching) {
@@ -168,15 +238,20 @@ class BrowserService {
           } catch {}
 
           this.browser.on("disconnected", () => {
-            logger.warn("BrowserService: 浏览器已断开连接");
+            const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1000) : 0;
+            logger.warn(`BrowserService: 浏览器已断开连接 (运行时长: ${uptime}s, 活跃会话: ${this.sessions.size})`);
             this.browser = null;
             this.sessions.clear();
             trackedBrowserPid = null;
+            this.proactiveReconnect();
           });
 
+          this.browserStartCount++;
+          this.browserStartTime = Date.now();
           const memAfter = getSystemMemoryInfo();
-          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt}, 第 ${this.browserStartCount} 次启动, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
 
+          this.recordSuccess();
           this.startHealthCheck();
 
           return this.browser;
@@ -192,6 +267,7 @@ class BrowserService {
         }
       }
 
+      this.recordFailure();
       throw lastError || new Error("浏览器启动失败");
     })().finally(() => {
       this.launching = null;
@@ -208,10 +284,11 @@ class BrowserService {
     this.healthCheckTimer = setInterval(async () => {
       try {
         if (!this.browser?.isConnected()) {
-          logger.warn("BrowserService: 健康检查发现浏览器已断开，等待下次请求重建...");
+          logger.warn("BrowserService: 健康检查发现浏览器已断开，启动主动重连...");
           this.browser = null;
           this.sessions.clear();
           this.stopHealthCheck();
+          this.proactiveReconnect();
           return;
         }
 
@@ -375,12 +452,14 @@ class BrowserService {
         this.browser = null;
         this.sessions.clear();
         if (attempt >= maxAttempts) {
+          this.recordFailure();
           throw err;
         }
         await new Promise(r => setTimeout(r, 3000));
       }
     }
 
+    this.recordFailure();
     throw new Error("会话创建失败");
   }
 
@@ -406,6 +485,63 @@ class BrowserService {
     url: string,
     options: { method?: string; headers?: Record<string, string>; body?: string }
   ): Promise<any> {
+    if (this.isCircuitOpen()) {
+      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1000);
+      const error: any = new Error(`BrowserService: 浏览器暂时不可用，请 ${remainingCooldown}s 后重试`);
+      error.statusCode = 503;
+      error.retryAfter = remainingCooldown;
+      throw error;
+    }
+
+    const fetchStart = Date.now();
+    let timedOut = false;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let pendingSessionToken: string | null = null;
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`BrowserService: 请求超时 (${FETCH_TIMEOUT / 1000}s)，浏览器可能正在重启`));
+      }, FETCH_TIMEOUT);
+    });
+
+    try {
+      pendingSessionToken = token;
+      const resultPromise = this._doFetch(token, url, options);
+      const result = await Promise.race([resultPromise, timeoutPromise]);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      const elapsed = Date.now() - fetchStart;
+      logger.info(`BrowserService: 请求完成 (${elapsed}ms)`);
+      this.recordSuccess();
+      return result;
+    } catch (err) {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      const elapsed = Date.now() - fetchStart;
+      logger.error(`BrowserService: 请求失败 (${elapsed}ms): ${(err as Error).message}`);
+
+      if (timedOut && pendingSessionToken) {
+        logger.warn(`BrowserService: 超时后清理会话 ${pendingSessionToken.substring(0, 8)}...`);
+        this.closeSession(pendingSessionToken).catch(() => {});
+      }
+
+      this.recordFailure();
+
+      if (timedOut) {
+        const error: any = new Error((err as Error).message);
+        error.statusCode = 503;
+        error.retryAfter = 10;
+        throw error;
+      }
+
+      throw err;
+    }
+  }
+
+  private async _doFetch(
+    token: string,
+    url: string,
+    options: { method?: string; headers?: Record<string, string>; body?: string }
+  ): Promise<any> {
     const session = await this.getSession(token);
 
     logger.info(`BrowserService: 代理请求 ${options.method || "GET"} ${url.substring(0, 100)}...`);
@@ -414,6 +550,8 @@ class BrowserService {
       const result = await session.page.evaluate(
         async ({ url, options }) => {
           try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 25000);
             const res = await fetch(url, {
               method: options.method || "GET",
               headers: {
@@ -422,7 +560,9 @@ class BrowserService {
               },
               body: options.body,
               credentials: "include",
+              signal: controller.signal,
             });
+            clearTimeout(timeoutId);
             const text = await res.text();
             return { ok: res.ok, status: res.status, text };
           } catch (err: any) {

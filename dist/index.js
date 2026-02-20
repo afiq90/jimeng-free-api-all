@@ -1024,15 +1024,74 @@ var BDMS_READY_TIMEOUT = 3e4;
 var BROWSER_LAUNCH_TIMEOUT = 12e4;
 var MAX_SESSIONS = 2;
 var HEALTH_CHECK_INTERVAL = 60 * 1e3;
+var FETCH_TIMEOUT = 3e4;
+var CIRCUIT_BREAKER_THRESHOLD = 3;
+var CIRCUIT_BREAKER_COOLDOWN = 60 * 1e3;
+var PROACTIVE_RECONNECT_DELAY = 2e3;
 var BrowserService = class {
   browser = null;
   sessions = /* @__PURE__ */ new Map();
   launching = null;
   healthCheckTimer = null;
+  consecutiveFailures = 0;
+  lastFailureTime = 0;
+  browserStartCount = 0;
+  browserStartTime = 0;
+  isReady() {
+    return this.browser !== null && this.browser.isConnected();
+  }
+  isCircuitOpen() {
+    if (this.consecutiveFailures < CIRCUIT_BREAKER_THRESHOLD) {
+      return false;
+    }
+    const elapsed = Date.now() - this.lastFailureTime;
+    if (elapsed > CIRCUIT_BREAKER_COOLDOWN) {
+      logger_default.info(`BrowserService: \u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s elapsed)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
+      this.consecutiveFailures = 0;
+      return false;
+    }
+    return true;
+  }
+  recordFailure() {
+    this.consecutiveFailures++;
+    this.lastFailureTime = Date.now();
+    logger_default.warn(`BrowserService: \u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.consecutiveFailures}/${CIRCUIT_BREAKER_THRESHOLD}`);
+  }
+  recordSuccess() {
+    if (this.consecutiveFailures > 0) {
+      logger_default.info(`BrowserService: \u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.consecutiveFailures} \u6B21)`);
+    }
+    this.consecutiveFailures = 0;
+  }
+  proactiveReconnect() {
+    if (this.launching) {
+      return;
+    }
+    if (this.isCircuitOpen()) {
+      logger_default.warn(`BrowserService: \u7194\u65AD\u5668\u6253\u5F00\uFF0C\u8DF3\u8FC7\u4E3B\u52A8\u91CD\u8FDE (\u51B7\u5374 ${Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3)}s)`);
+      return;
+    }
+    logger_default.info(`BrowserService: \u542F\u52A8\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE (${PROACTIVE_RECONNECT_DELAY}ms \u540E)...`);
+    setTimeout(() => {
+      if (this.isReady() || this.launching) {
+        return;
+      }
+      logger_default.info(`BrowserService: \u6267\u884C\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE...`);
+      this.ensureBrowser().then(() => {
+        logger_default.info(`BrowserService: \u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE\u6210\u529F`);
+      }).catch((err) => {
+        logger_default.error(`BrowserService: \u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE\u5931\u8D25: ${err.message}`);
+      });
+    }, PROACTIVE_RECONNECT_DELAY);
+  }
   async ensureBrowser() {
     var _a;
     if ((_a = this.browser) == null ? void 0 : _a.isConnected()) {
       return this.browser;
+    }
+    if (this.isCircuitOpen()) {
+      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3);
+      throw new Error(`BrowserService: \u7194\u65AD\u5668\u6253\u5F00\uFF0C\u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remainingCooldown}s \u540E\u91CD\u8BD5`);
     }
     if (this.launching) {
       return this.launching;
@@ -1100,13 +1159,18 @@ var BrowserService = class {
           } catch {
           }
           this.browser.on("disconnected", () => {
-            logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
+            const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1e3) : 0;
+            logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5 (\u8FD0\u884C\u65F6\u957F: ${uptime}s, \u6D3B\u8DC3\u4F1A\u8BDD: ${this.sessions.size})`);
             this.browser = null;
             this.sessions.clear();
             trackedBrowserPid = null;
+            this.proactiveReconnect();
           });
+          this.browserStartCount++;
+          this.browserStartTime = Date.now();
           const memAfter = getSystemMemoryInfo();
-          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt}, \u7B2C ${this.browserStartCount} \u6B21\u542F\u52A8, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          this.recordSuccess();
           this.startHealthCheck();
           return this.browser;
         } catch (err) {
@@ -1120,6 +1184,7 @@ var BrowserService = class {
           }
         }
       }
+      this.recordFailure();
       throw lastError || new Error("\u6D4F\u89C8\u5668\u542F\u52A8\u5931\u8D25");
     })().finally(() => {
       this.launching = null;
@@ -1134,10 +1199,11 @@ var BrowserService = class {
       var _a;
       try {
         if (!((_a = this.browser) == null ? void 0 : _a.isConnected())) {
-          logger_default.warn("BrowserService: \u5065\u5EB7\u68C0\u67E5\u53D1\u73B0\u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\uFF0C\u7B49\u5F85\u4E0B\u6B21\u8BF7\u6C42\u91CD\u5EFA...");
+          logger_default.warn("BrowserService: \u5065\u5EB7\u68C0\u67E5\u53D1\u73B0\u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\uFF0C\u542F\u52A8\u4E3B\u52A8\u91CD\u8FDE...");
           this.browser = null;
           this.sessions.clear();
           this.stopHealthCheck();
+          this.proactiveReconnect();
           return;
         }
         const memInfo = getSystemMemoryInfo();
@@ -1275,11 +1341,13 @@ var BrowserService = class {
         this.browser = null;
         this.sessions.clear();
         if (attempt >= maxAttempts) {
+          this.recordFailure();
           throw err;
         }
         await new Promise((r) => setTimeout(r, 3e3));
       }
     }
+    this.recordFailure();
     throw new Error("\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25");
   }
   async closeSession(token) {
@@ -1296,12 +1364,60 @@ var BrowserService = class {
     this.sessions.delete(token);
   }
   async fetch(token, url, options) {
+    if (this.isCircuitOpen()) {
+      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3);
+      const error = new Error(`BrowserService: \u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remainingCooldown}s \u540E\u91CD\u8BD5`);
+      error.statusCode = 503;
+      error.retryAfter = remainingCooldown;
+      throw error;
+    }
+    const fetchStart = Date.now();
+    let timedOut = false;
+    let timeoutTimer = null;
+    let pendingSessionToken = null;
+    const timeoutPromise = new Promise((_17, reject) => {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`BrowserService: \u8BF7\u6C42\u8D85\u65F6 (${FETCH_TIMEOUT / 1e3}s)\uFF0C\u6D4F\u89C8\u5668\u53EF\u80FD\u6B63\u5728\u91CD\u542F`));
+      }, FETCH_TIMEOUT);
+    });
+    try {
+      pendingSessionToken = token;
+      const resultPromise = this._doFetch(token, url, options);
+      const result = await Promise.race([resultPromise, timeoutPromise]);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      const elapsed = Date.now() - fetchStart;
+      logger_default.info(`BrowserService: \u8BF7\u6C42\u5B8C\u6210 (${elapsed}ms)`);
+      this.recordSuccess();
+      return result;
+    } catch (err) {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      const elapsed = Date.now() - fetchStart;
+      logger_default.error(`BrowserService: \u8BF7\u6C42\u5931\u8D25 (${elapsed}ms): ${err.message}`);
+      if (timedOut && pendingSessionToken) {
+        logger_default.warn(`BrowserService: \u8D85\u65F6\u540E\u6E05\u7406\u4F1A\u8BDD ${pendingSessionToken.substring(0, 8)}...`);
+        this.closeSession(pendingSessionToken).catch(() => {
+        });
+      }
+      this.recordFailure();
+      if (timedOut) {
+        const error = new Error(err.message);
+        error.statusCode = 503;
+        error.retryAfter = 10;
+        throw error;
+      }
+      throw err;
+    }
+  }
+  async _doFetch(token, url, options) {
     const session = await this.getSession(token);
     logger_default.info(`BrowserService: \u4EE3\u7406\u8BF7\u6C42 ${options.method || "GET"} ${url.substring(0, 100)}...`);
     try {
       const result = await session.page.evaluate(
         async ({ url: url2, options: options2 }) => {
           try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 25e3);
             const res = await fetch(url2, {
               method: options2.method || "GET",
               headers: {
@@ -1309,8 +1425,10 @@ var BrowserService = class {
                 ...options2.headers || {}
               },
               body: options2.body,
-              credentials: "include"
+              credentials: "include",
+              signal: controller.signal
             });
+            clearTimeout(timeoutId);
             const text = await res.text();
             return { ok: res.ok, status: res.status, text };
           } catch (err) {
