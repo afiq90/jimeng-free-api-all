@@ -493,35 +493,53 @@ class BrowserService {
       throw error;
     }
 
+    const totalStart = Date.now();
+
+    let session;
+    try {
+      logger.info(`BrowserService: 获取会话中...`);
+      session = await this.getSession(token);
+      const sessionElapsed = Date.now() - totalStart;
+      logger.info(`BrowserService: 会话就绪 (${sessionElapsed}ms)`);
+    } catch (err) {
+      const elapsed = Date.now() - totalStart;
+      logger.error(`BrowserService: 会话获取失败 (${elapsed}ms): ${(err as Error).message}`);
+      this.recordFailure();
+      const error: any = new Error(`BrowserService: 会话获取失败: ${(err as Error).message}`);
+      error.statusCode = 503;
+      error.retryAfter = 10;
+      throw error;
+    }
+
     const fetchStart = Date.now();
     let timedOut = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
-    let pendingSessionToken: string | null = null;
 
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        reject(new Error(`BrowserService: 请求超时 (${FETCH_TIMEOUT / 1000}s)，浏览器可能正在重启`));
+        reject(new Error(`BrowserService: 请求超时 (${FETCH_TIMEOUT / 1000}s)`));
       }, FETCH_TIMEOUT);
     });
 
     try {
-      pendingSessionToken = token;
-      const resultPromise = this._doFetch(token, url, options);
+      const resultPromise = this._doFetch(token, session, url, options);
       const result = await Promise.race([resultPromise, timeoutPromise]);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
-      logger.info(`BrowserService: 请求完成 (${elapsed}ms)`);
+      const totalElapsed = Date.now() - totalStart;
+      logger.info(`BrowserService: 请求完成 (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
       this.recordSuccess();
       return result;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
-      logger.error(`BrowserService: 请求失败 (${elapsed}ms): ${(err as Error).message}`);
+      const totalElapsed = Date.now() - totalStart;
+      logger.error(`BrowserService: 请求失败 (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${(err as Error).message}`);
 
-      if (timedOut && pendingSessionToken) {
-        logger.warn(`BrowserService: 超时后清理会话 ${pendingSessionToken.substring(0, 8)}...`);
-        this.closeSession(pendingSessionToken).catch(() => {});
+      if (timedOut) {
+        logger.warn(`BrowserService: 超时后清理会话 ${token.substring(0, 8)}...`);
+        this.closeSession(token).catch(() => {});
       }
 
       this.recordFailure();
@@ -539,19 +557,18 @@ class BrowserService {
 
   private async _doFetch(
     token: string,
+    session: BrowserSession,
     url: string,
     options: { method?: string; headers?: Record<string, string>; body?: string }
   ): Promise<any> {
-    const session = await this.getSession(token);
-
     logger.info(`BrowserService: 代理请求 ${options.method || "GET"} ${url.substring(0, 100)}...`);
 
     try {
       const result = await session.page.evaluate(
-        async ({ url, options }) => {
+        async ({ url, options, timeoutMs }) => {
           try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000);
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const res = await fetch(url, {
               method: options.method || "GET",
               headers: {
@@ -569,7 +586,7 @@ class BrowserService {
             return { ok: false, status: 0, text: "", error: err.message };
           }
         },
-        { url, options }
+        { url, options, timeoutMs: FETCH_TIMEOUT - 2000 }
       );
 
       if (result.error) {
