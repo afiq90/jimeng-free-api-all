@@ -1047,57 +1047,109 @@ var SESSION_IDLE_TIMEOUT = 5 * 60 * 1e3;
 var BDMS_READY_TIMEOUT = 3e4;
 var BROWSER_LAUNCH_TIMEOUT = 12e4;
 var MAX_SESSIONS = 2;
-var HEALTH_CHECK_INTERVAL = 60 * 1e3;
+var HEALTH_CHECK_INTERVAL = 30 * 1e3;
 var FETCH_TIMEOUT = 3e4;
-var CIRCUIT_BREAKER_THRESHOLD = 3;
-var CIRCUIT_BREAKER_COOLDOWN = 60 * 1e3;
 var PROACTIVE_RECONNECT_DELAY = 2e3;
+var API_CIRCUIT_BREAKER_THRESHOLD = 3;
+var API_CIRCUIT_BREAKER_COOLDOWN = 20 * 1e3;
+var BROWSER_CIRCUIT_BREAKER_THRESHOLD = 3;
+var BROWSER_CIRCUIT_BREAKER_COOLDOWN = 30 * 1e3;
 var BrowserService = class {
   browser = null;
   sessions = /* @__PURE__ */ new Map();
   launching = null;
   healthCheckTimer = null;
-  consecutiveFailures = 0;
-  lastFailureTime = 0;
+  apiConsecutiveFailures = 0;
+  apiLastFailureTime = 0;
+  browserConsecutiveFailures = 0;
+  browserLastFailureTime = 0;
   browserStartCount = 0;
   browserStartTime = 0;
   isReady() {
     return this.browser !== null && this.browser.isConnected();
   }
-  isCircuitOpen() {
-    if (this.consecutiveFailures < CIRCUIT_BREAKER_THRESHOLD) {
+  isApiCircuitOpen() {
+    if (this.apiConsecutiveFailures < API_CIRCUIT_BREAKER_THRESHOLD) {
       return false;
     }
-    const elapsed = Date.now() - this.lastFailureTime;
-    if (elapsed > CIRCUIT_BREAKER_COOLDOWN) {
-      logger_default.info(`BrowserService: \u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s elapsed)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
-      this.consecutiveFailures = 0;
+    const elapsed = Date.now() - this.apiLastFailureTime;
+    if (elapsed > API_CIRCUIT_BREAKER_COOLDOWN) {
+      logger_default.info(`BrowserService: API\u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
+      this.apiConsecutiveFailures = 0;
       return false;
     }
     return true;
   }
-  recordFailure() {
-    this.consecutiveFailures++;
-    this.lastFailureTime = Date.now();
-    logger_default.warn(`BrowserService: \u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.consecutiveFailures}/${CIRCUIT_BREAKER_THRESHOLD}`);
-  }
-  recordSuccess() {
-    if (this.consecutiveFailures > 0) {
-      logger_default.info(`BrowserService: \u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.consecutiveFailures} \u6B21)`);
+  isBrowserCircuitOpen() {
+    if (this.browserConsecutiveFailures < BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
+      return false;
     }
-    this.consecutiveFailures = 0;
+    const elapsed = Date.now() - this.browserLastFailureTime;
+    if (elapsed > BROWSER_CIRCUIT_BREAKER_COOLDOWN) {
+      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
+      this.browserConsecutiveFailures = 0;
+      return false;
+    }
+    return true;
+  }
+  recordApiFailure() {
+    this.apiConsecutiveFailures++;
+    this.apiLastFailureTime = Date.now();
+    logger_default.warn(`BrowserService: API\u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
+    if (this.apiConsecutiveFailures >= API_CIRCUIT_BREAKER_THRESHOLD) {
+      logger_default.warn(`BrowserService: API\u7194\u65AD\u5668\u5DF2\u6253\u5F00\uFF0C\u51B7\u5374 ${API_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
+      this.scheduleApiRecovery();
+    }
+  }
+  recordApiSuccess() {
+    if (this.apiConsecutiveFailures > 0) {
+      logger_default.info(`BrowserService: API\u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.apiConsecutiveFailures} \u6B21)`);
+    }
+    this.apiConsecutiveFailures = 0;
+  }
+  recordBrowserFailure() {
+    this.browserConsecutiveFailures++;
+    this.browserLastFailureTime = Date.now();
+    logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
+    if (this.browserConsecutiveFailures >= BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
+      logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u5DF2\u6253\u5F00\uFF0C\u51B7\u5374 ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
+      this.scheduleBrowserRecovery();
+    }
+  }
+  recordBrowserSuccess() {
+    if (this.browserConsecutiveFailures > 0) {
+      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.browserConsecutiveFailures} \u6B21)`);
+    }
+    this.browserConsecutiveFailures = 0;
+  }
+  scheduleApiRecovery() {
+    setTimeout(() => {
+      logger_default.info(`BrowserService: API\u7194\u65AD\u5668\u51B7\u5374\u7ED3\u675F\uFF0C\u91CD\u7F6E\u8BA1\u6570`);
+      this.apiConsecutiveFailures = 0;
+    }, API_CIRCUIT_BREAKER_COOLDOWN + 1e3);
+  }
+  scheduleBrowserRecovery() {
+    setTimeout(() => {
+      if (this.isReady() || this.launching) {
+        logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u68C0\u67E5\uFF1A\u6D4F\u89C8\u5668\u5DF2\u5C31\u7EEA\uFF0C\u65E0\u9700\u91CD\u8FDE`);
+        return;
+      }
+      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u51B7\u5374\u7ED3\u675F\uFF0C\u5C1D\u8BD5\u6062\u590D...`);
+      this.browserConsecutiveFailures = 0;
+      this.ensureBrowser().then(() => {
+        logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u6210\u529F`);
+      }).catch((err) => {
+        logger_default.error(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u5931\u8D25: ${err.message}`);
+      });
+    }, BROWSER_CIRCUIT_BREAKER_COOLDOWN + 1e3);
   }
   proactiveReconnect() {
-    if (this.launching) {
-      return;
-    }
-    if (this.isCircuitOpen()) {
-      logger_default.warn(`BrowserService: \u7194\u65AD\u5668\u6253\u5F00\uFF0C\u8DF3\u8FC7\u4E3B\u52A8\u91CD\u8FDE (\u51B7\u5374 ${Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3)}s)`);
+    if (this.launching || this.isBrowserCircuitOpen()) {
       return;
     }
     logger_default.info(`BrowserService: \u542F\u52A8\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE (${PROACTIVE_RECONNECT_DELAY}ms \u540E)...`);
     setTimeout(() => {
-      if (this.isReady() || this.launching) {
+      if (this.isReady() || this.launching || this.isBrowserCircuitOpen()) {
         return;
       }
       logger_default.info(`BrowserService: \u6267\u884C\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE...`);
@@ -1113,9 +1165,9 @@ var BrowserService = class {
     if ((_a = this.browser) == null ? void 0 : _a.isConnected()) {
       return this.browser;
     }
-    if (this.isCircuitOpen()) {
-      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3);
-      throw new Error(`BrowserService: \u7194\u65AD\u5668\u6253\u5F00\uFF0C\u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remainingCooldown}s \u540E\u91CD\u8BD5`);
+    if (this.isBrowserCircuitOpen()) {
+      const remaining = Math.round((BROWSER_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.browserLastFailureTime)) / 1e3);
+      throw new Error(`BrowserService: \u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remaining}s \u540E\u91CD\u8BD5`);
     }
     if (this.launching) {
       return this.launching;
@@ -1194,7 +1246,7 @@ var BrowserService = class {
           this.browserStartTime = Date.now();
           const memAfter = getSystemMemoryInfo();
           logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt}, \u7B2C ${this.browserStartCount} \u6B21\u542F\u52A8, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
-          this.recordSuccess();
+          this.recordBrowserSuccess();
           this.startHealthCheck();
           return this.browser;
         } catch (err) {
@@ -1208,7 +1260,7 @@ var BrowserService = class {
           }
         }
       }
-      this.recordFailure();
+      this.recordBrowserFailure();
       throw lastError || new Error("\u6D4F\u89C8\u5668\u542F\u52A8\u5931\u8D25");
     })().finally(() => {
       this.launching = null;
@@ -1365,13 +1417,13 @@ var BrowserService = class {
         this.browser = null;
         this.sessions.clear();
         if (attempt >= maxAttempts) {
-          this.recordFailure();
+          this.recordBrowserFailure();
           throw err;
         }
         await new Promise((r) => setTimeout(r, 3e3));
       }
     }
-    this.recordFailure();
+    this.recordBrowserFailure();
     throw new Error("\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25");
   }
   async closeSession(token) {
@@ -1388,42 +1440,59 @@ var BrowserService = class {
     this.sessions.delete(token);
   }
   async fetch(token, url, options) {
-    if (this.isCircuitOpen()) {
-      const remainingCooldown = Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1e3);
-      const error = new Error(`BrowserService: \u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remainingCooldown}s \u540E\u91CD\u8BD5`);
+    if (this.isApiCircuitOpen()) {
+      const remaining = Math.round((API_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.apiLastFailureTime)) / 1e3);
+      const error = new Error(`BrowserService: \u8BF7\u6C42\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remaining}s \u540E\u91CD\u8BD5`);
       error.statusCode = 503;
-      error.retryAfter = remainingCooldown;
+      error.retryAfter = remaining;
+      throw error;
+    }
+    const totalStart = Date.now();
+    let session;
+    try {
+      logger_default.info(`BrowserService: \u83B7\u53D6\u4F1A\u8BDD\u4E2D...`);
+      session = await this.getSession(token);
+      const sessionElapsed = Date.now() - totalStart;
+      logger_default.info(`BrowserService: \u4F1A\u8BDD\u5C31\u7EEA (${sessionElapsed}ms)`);
+    } catch (err) {
+      const elapsed = Date.now() - totalStart;
+      logger_default.error(`BrowserService: \u4F1A\u8BDD\u83B7\u53D6\u5931\u8D25 (${elapsed}ms): ${err.message}`);
+      const error = new Error(`BrowserService: \u4F1A\u8BDD\u83B7\u53D6\u5931\u8D25: ${err.message}`);
+      error.statusCode = 503;
+      error.retryAfter = 10;
       throw error;
     }
     const fetchStart = Date.now();
     let timedOut = false;
     let timeoutTimer = null;
-    let pendingSessionToken = null;
+    const cancelToken = { cancelled: false };
     const timeoutPromise = new Promise((_17, reject) => {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        reject(new Error(`BrowserService: \u8BF7\u6C42\u8D85\u65F6 (${FETCH_TIMEOUT / 1e3}s)\uFF0C\u6D4F\u89C8\u5668\u53EF\u80FD\u6B63\u5728\u91CD\u542F`));
+        cancelToken.cancelled = true;
+        reject(new Error(`BrowserService: \u8BF7\u6C42\u8D85\u65F6 (${FETCH_TIMEOUT / 1e3}s)`));
       }, FETCH_TIMEOUT);
     });
     try {
-      pendingSessionToken = token;
-      const resultPromise = this._doFetch(token, url, options);
+      const resultPromise = this._doFetch(token, session, url, options, cancelToken);
       const result = await Promise.race([resultPromise, timeoutPromise]);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
-      logger_default.info(`BrowserService: \u8BF7\u6C42\u5B8C\u6210 (${elapsed}ms)`);
-      this.recordSuccess();
+      const totalElapsed = Date.now() - totalStart;
+      logger_default.info(`BrowserService: \u8BF7\u6C42\u5B8C\u6210 (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
+      this.recordApiSuccess();
       return result;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
-      logger_default.error(`BrowserService: \u8BF7\u6C42\u5931\u8D25 (${elapsed}ms): ${err.message}`);
-      if (timedOut && pendingSessionToken) {
-        logger_default.warn(`BrowserService: \u8D85\u65F6\u540E\u6E05\u7406\u4F1A\u8BDD ${pendingSessionToken.substring(0, 8)}...`);
-        this.closeSession(pendingSessionToken).catch(() => {
+      const totalElapsed = Date.now() - totalStart;
+      logger_default.error(`BrowserService: \u8BF7\u6C42\u5931\u8D25 (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${err.message}`);
+      if (timedOut) {
+        logger_default.warn(`BrowserService: \u8D85\u65F6\uFF0C\u5173\u95ED\u4F1A\u8BDD\u4EE5\u4E2D\u6B62\u4EFB\u4F55\u8FDB\u884C\u4E2D\u7684\u8BF7\u6C42 ${token.substring(0, 8)}...`);
+        this.closeSession(token).catch(() => {
         });
       }
-      this.recordFailure();
+      this.recordApiFailure();
       if (timedOut) {
         const error = new Error(err.message);
         error.statusCode = 503;
@@ -1433,15 +1502,18 @@ var BrowserService = class {
       throw err;
     }
   }
-  async _doFetch(token, url, options) {
-    const session = await this.getSession(token);
+  async _doFetch(token, session, url, options, cancelToken) {
+    if (cancelToken.cancelled) {
+      logger_default.warn(`BrowserService: \u8BF7\u6C42\u5DF2\u53D6\u6D88\uFF0C\u8DF3\u8FC7\u53D1\u9001\u5230 Jimeng`);
+      throw new Error("BrowserService: \u8BF7\u6C42\u5DF2\u88AB\u53D6\u6D88");
+    }
     logger_default.info(`BrowserService: \u4EE3\u7406\u8BF7\u6C42 ${options.method || "GET"} ${url.substring(0, 100)}...`);
     try {
       const result = await session.page.evaluate(
-        async ({ url: url2, options: options2 }) => {
+        async ({ url: url2, options: options2, timeoutMs }) => {
           try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25e3);
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const res = await fetch(url2, {
               method: options2.method || "GET",
               headers: {
@@ -1459,7 +1531,7 @@ var BrowserService = class {
             return { ok: false, status: 0, text: "", error: err.message };
           }
         },
-        { url, options }
+        { url, options, timeoutMs: FETCH_TIMEOUT - 2e3 }
       );
       if (result.error) {
         throw new Error(`\u6D4F\u89C8\u5668 fetch \u5931\u8D25: ${result.error}`);
@@ -1476,6 +1548,17 @@ var BrowserService = class {
       await this.closeSession(token);
       throw err;
     }
+  }
+  warmUp() {
+    if (this.isReady() || this.launching) {
+      return;
+    }
+    logger_default.info(`BrowserService: \u9884\u70ED\u6D4F\u89C8\u5668...`);
+    this.ensureBrowser().then(() => {
+      logger_default.info(`BrowserService: \u9884\u70ED\u5B8C\u6210\uFF0C\u6D4F\u89C8\u5668\u5DF2\u5C31\u7EEA`);
+    }).catch((err) => {
+      logger_default.warn(`BrowserService: \u9884\u70ED\u5931\u8D25: ${err.message}\uFF0C\u5C06\u5728\u9996\u6B21\u8BF7\u6C42\u65F6\u91CD\u8BD5`);
+    });
   }
   async close() {
     logger_default.info("BrowserService: \u6B63\u5728\u5173\u95ED\u6240\u6709\u4F1A\u8BDD\u548C\u6D4F\u89C8\u5668...");
@@ -1495,6 +1578,7 @@ var BrowserService = class {
   }
 };
 var browserService = new BrowserService();
+browserService.warmUp();
 var browser_service_default = browserService;
 
 // src/lib/initialize.ts
@@ -1916,7 +2000,7 @@ var import_crypto2 = __toESM(require("crypto"), 1);
 
 // src/lib/configs/model-config.ts
 var MODEL_CONFIGS = {
-  "jimeng-5.0-preview": {
+  "jimeng-5.0": {
     internalModel: "high_aes_general_v50",
     draftVersion: "3.3.9",
     features: {
@@ -2291,7 +2375,7 @@ function resolveResolution(resolution = "2k", ratio = "1:1") {
   };
 }
 var MODEL_DRAFT_VERSIONS = {
-  "jimeng-5.0-preview": "3.3.9",
+  "jimeng-5.0": "3.3.9",
   "jimeng-4.6": "3.3.9",
   "jimeng-4.5": "3.3.4",
   "jimeng-4.1": "3.3.4",
@@ -2313,7 +2397,7 @@ function getDraftVersion(model) {
   }
 }
 var MODEL_MAP = {
-  "jimeng-5.0-preview": "high_aes_general_v50",
+  "jimeng-5.0": "high_aes_general_v50",
   "jimeng-4.6": "high_aes_general_v42",
   "jimeng-4.5": "high_aes_general_v40l",
   "jimeng-4.1": "high_aes_general_v41",
@@ -3432,13 +3516,49 @@ var images_default = {
   prefix: "/v1/images",
   post: {
     "/generations": async (request2) => {
+      var _a;
       const unsupportedParams = ["size", "width", "height"];
       const bodyKeys = Object.keys(request2.body);
       const foundUnsupported = unsupportedParams.filter((param) => bodyKeys.includes(param));
       if (foundUnsupported.length > 0) {
         throw new Error(`\u4E0D\u652F\u6301\u7684\u53C2\u6570: ${foundUnsupported.join(", ")}\u3002\u8BF7\u4F7F\u7528 ratio \u548C resolution \u53C2\u6570\u63A7\u5236\u56FE\u50CF\u5C3A\u5BF8\u3002`);
       }
-      request2.validate("body.model", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.prompt", import_lodash13.default.isString).validate("body.negative_prompt", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.ratio", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.resolution", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.intelligent_ratio", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isBoolean(v)).validate("body.sample_strength", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isFinite(v)).validate("body.response_format", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("headers.authorization", import_lodash13.default.isString);
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      if (isMultiPart) {
+        request2.validate("body.model", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.prompt", import_lodash13.default.isString).validate("body.negative_prompt", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.ratio", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.resolution", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.intelligent_ratio", (v) => import_lodash13.default.isUndefined(v) || typeof v === "string" && (v === "true" || v === "false") || import_lodash13.default.isBoolean(v)).validate("body.sample_strength", (v) => import_lodash13.default.isUndefined(v) || typeof v === "string" && !isNaN(parseFloat(v)) || import_lodash13.default.isFinite(v)).validate("body.response_format", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("headers.authorization", import_lodash13.default.isString);
+      } else {
+        request2.validate("body.model", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.prompt", import_lodash13.default.isString).validate("body.images", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isArray(v)).validate("body.negative_prompt", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.ratio", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.resolution", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("body.intelligent_ratio", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isBoolean(v)).validate("body.sample_strength", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isFinite(v)).validate("body.response_format", (v) => import_lodash13.default.isUndefined(v) || import_lodash13.default.isString(v)).validate("headers.authorization", import_lodash13.default.isString);
+      }
+      let images = null;
+      if (isMultiPart) {
+        const files = (_a = request2.files) == null ? void 0 : _a.images;
+        if (files) {
+          const imageFiles = Array.isArray(files) ? files : [files];
+          if (imageFiles.length > 0) {
+            if (imageFiles.length > 10) {
+              throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
+            }
+            images = imageFiles.map((file) => import_fs2.default.readFileSync(file.filepath));
+          }
+        }
+      } else {
+        const bodyImages = request2.body.images;
+        if (bodyImages && Array.isArray(bodyImages) && bodyImages.length > 0) {
+          if (bodyImages.length > 10) {
+            throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
+          }
+          bodyImages.forEach((image, index) => {
+            if (!import_lodash13.default.isString(image) && !import_lodash13.default.isObject(image)) {
+              throw new Error(`\u56FE\u7247 ${index + 1} \u683C\u5F0F\u4E0D\u6B63\u786E\uFF1A\u5E94\u4E3AURL\u5B57\u7B26\u4E32\u6216\u5305\u542Burl\u5B57\u6BB5\u7684\u5BF9\u8C61`);
+            }
+            if (import_lodash13.default.isObject(image) && !image.url) {
+              throw new Error(`\u56FE\u7247 ${index + 1} \u7F3A\u5C11url\u5B57\u6BB5`);
+            }
+          });
+          images = bodyImages.map((image) => import_lodash13.default.isString(image) ? image : image.url);
+        }
+      }
       const tokens = tokenSplit(request2.headers.authorization);
       const token = import_lodash13.default.sample(tokens);
       const {
@@ -3451,14 +3571,32 @@ var images_default = {
         sample_strength: sampleStrength,
         response_format
       } = request2.body;
+      const finalSampleStrength = isMultiPart && typeof sampleStrength === "string" ? parseFloat(sampleStrength) : sampleStrength;
+      const finalIntelligentRatio = isMultiPart && typeof intelligentRatio === "string" ? intelligentRatio === "true" : intelligentRatio;
       const responseFormat = import_lodash13.default.defaultTo(response_format, "url");
-      const imageUrls = await generateImages(model, prompt, {
-        ratio,
-        resolution,
-        sampleStrength,
-        negativePrompt,
-        intelligentRatio
-      }, token);
+      let imageUrls;
+      let resultData = {
+        created: util_default.unixTimestamp()
+      };
+      if (images && images.length > 0) {
+        imageUrls = await generateImageComposition(model, prompt, images, {
+          ratio,
+          resolution,
+          sampleStrength: finalSampleStrength,
+          negativePrompt,
+          intelligentRatio: finalIntelligentRatio
+        }, token);
+        resultData.input_images = images.length;
+        resultData.composition_type = "multi_image_synthesis";
+      } else {
+        imageUrls = await generateImages(model, prompt, {
+          ratio,
+          resolution,
+          sampleStrength: finalSampleStrength,
+          negativePrompt,
+          intelligentRatio: finalIntelligentRatio
+        }, token);
+      }
       let data = [];
       if (responseFormat == "b64_json") {
         data = (await Promise.all(imageUrls.map((url) => util_default.fetchFileBASE64(url)))).map((b64) => ({ b64_json: b64 }));
@@ -3467,10 +3605,8 @@ var images_default = {
           url
         }));
       }
-      return {
-        created: util_default.unixTimestamp(),
-        data
-      };
+      resultData.data = data;
+      return resultData;
     },
     // 图片合成路由（图生图）
     "/compositions": async (request2) => {
@@ -3611,6 +3747,61 @@ var SEEDANCE_BENEFIT_TYPE_MAP = {
 function isSeedanceModel(model) {
   return model.startsWith("seedance-") || model.startsWith("jimeng-video-seedance-");
 }
+var MIME_TO_MATERIAL_TYPE = {
+  "image/jpeg": "image",
+  "image/png": "image",
+  "image/webp": "image",
+  "image/gif": "image",
+  "image/bmp": "image",
+  "video/mp4": "video",
+  "video/quicktime": "video",
+  "video/x-m4v": "video",
+  "audio/mpeg": "audio",
+  "audio/wav": "audio",
+  "audio/x-wav": "audio",
+  "audio/mp3": "audio"
+};
+var EXT_TO_MATERIAL_TYPE = {
+  ".jpg": "image",
+  ".jpeg": "image",
+  ".png": "image",
+  ".webp": "image",
+  ".gif": "image",
+  ".bmp": "image",
+  ".mp4": "video",
+  ".mov": "video",
+  ".m4v": "video",
+  ".mp3": "audio",
+  ".wav": "audio"
+};
+var MATERIAL_TYPE_CODE = {
+  image: 1,
+  video: 2,
+  audio: 3
+};
+function detectMaterialType(file) {
+  const mime4 = (file.mimetype || file.mimeType || "").toLowerCase();
+  if (mime4 && MIME_TO_MATERIAL_TYPE[mime4]) return MIME_TO_MATERIAL_TYPE[mime4];
+  const filename = (file.originalFilename || file.newFilename || "").toLowerCase();
+  const dotIdx = filename.lastIndexOf(".");
+  if (dotIdx >= 0) {
+    const ext = filename.substring(dotIdx);
+    if (EXT_TO_MATERIAL_TYPE[ext]) return EXT_TO_MATERIAL_TYPE[ext];
+  }
+  return "image";
+}
+function detectMaterialTypeFromUrl(url) {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    const dotIdx = pathname.lastIndexOf(".");
+    if (dotIdx >= 0) {
+      const ext = pathname.substring(dotIdx);
+      if (EXT_TO_MATERIAL_TYPE[ext]) return EXT_TO_MATERIAL_TYPE[ext];
+    }
+  } catch {
+  }
+  return "image";
+}
 var VIDEO_RESOLUTION_OPTIONS = {
   "480p": {
     "1:1": { width: 480, height: 480 },
@@ -3653,14 +3844,14 @@ function resolveVideoResolution(resolution = "720p", ratio = "1:1") {
 function getModel2(model) {
   return MODEL_MAP2[model] || MODEL_MAP2[DEFAULT_MODEL2];
 }
-function createSignature2(method, url, headers, accessKeyId, secretAccessKey, sessionToken, payload = "") {
+function createSignature2(method, url, headers, accessKeyId, secretAccessKey, sessionToken, payload = "", awsRegion = "cn-north-1", serviceName = "imagex") {
   const urlObj = new URL(url);
   const pathname = urlObj.pathname || "/";
   const search = urlObj.search;
   const timestamp = headers["x-amz-date"];
   const date = timestamp.substr(0, 8);
-  const region = "cn-north-1";
-  const service = "imagex";
+  const region = awsRegion;
+  const service = serviceName;
   const queryParams = [];
   const searchParams = new URLSearchParams(search);
   searchParams.forEach((value, key) => {
@@ -4014,6 +4205,193 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     logger_default.error(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
     throw error;
   }
+}
+function parseAudioDuration(buffer) {
+  try {
+    if (buffer.length >= 44 && buffer[0] === 82 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 70 && buffer[8] === 87 && buffer[9] === 65 && buffer[10] === 86 && buffer[11] === 69) {
+      const byteRate = buffer.readUInt32LE(28);
+      if (byteRate > 0) {
+        let offset = 12;
+        while (offset < buffer.length - 8) {
+          const chunkId = buffer.toString("ascii", offset, offset + 4);
+          const chunkSize = buffer.readUInt32LE(offset + 4);
+          if (chunkId === "data") {
+            return Math.round(chunkSize / byteRate * 1e3);
+          }
+          offset += 8 + chunkSize;
+        }
+        return Math.round((buffer.length - 44) / byteRate * 1e3);
+      }
+    }
+    return Math.round(buffer.length / (128 * 1e3 / 8) * 1e3);
+  } catch {
+    return 0;
+  }
+}
+async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
+  var _a, _b, _c, _d, _e, _f, _g;
+  const label = mediaType === "audio" ? "\u97F3\u9891" : "\u89C6\u9891";
+  const fileSize = buffer.length;
+  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6\uFF0C\u5927\u5C0F: ${fileSize} \u5B57\u8282`);
+  const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
+    data: { scene: 1 }
+  });
+  const { access_key_id, secret_access_key, session_token, space_name } = tokenResult;
+  if (!access_key_id || !secret_access_key || !session_token) {
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25`);
+  }
+  const spaceName = space_name || "dreamina";
+  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: spaceName=${spaceName}`);
+  const now = /* @__PURE__ */ new Date();
+  const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const randomStr = Math.random().toString(36).substring(2, 12);
+  const vodHost = "https://vod.bytedanceapi.com";
+  const applyUrl = `${vodHost}/?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=${spaceName}&FileType=video&IsInner=1&FileSize=${fileSize}&s=${randomStr}`;
+  const requestHeaders = {
+    "x-amz-date": timestamp,
+    "x-amz-security-token": session_token
+  };
+  const authorization = createSignature2(
+    "GET",
+    applyUrl,
+    requestHeaders,
+    access_key_id,
+    secret_access_key,
+    session_token,
+    "",
+    "cn-north-1",
+    "vod"
+  );
+  logger_default.info(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650: ${applyUrl}`);
+  const applyResponse = await fetch(applyUrl, {
+    method: "GET",
+    headers: {
+      "accept": "*/*",
+      "accept-language": "zh-CN,zh;q=0.9",
+      "authorization": authorization,
+      "origin": "https://jimeng.jianying.com",
+      "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+      "x-amz-date": timestamp,
+      "x-amz-security-token": session_token
+    }
+  });
+  if (!applyResponse.ok) {
+    const errorText = await applyResponse.text();
+    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
+  }
+  const applyResult = await applyResponse.json();
+  if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
+    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+  }
+  const uploadNodes = (_c = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.InnerUploadAddress) == null ? void 0 : _c.UploadNodes;
+  if (!uploadNodes || uploadNodes.length === 0) {
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u5931\u8D25: ${JSON.stringify(applyResult)}`);
+  }
+  const uploadNode = uploadNodes[0];
+  const storeInfo = (_d = uploadNode.StoreInfos) == null ? void 0 : _d[0];
+  if (!storeInfo) {
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u5B58\u50A8\u4FE1\u606F\u5931\u8D25: ${JSON.stringify(uploadNode)}`);
+  }
+  const uploadHost = uploadNode.UploadHost;
+  const storeUri = storeInfo.StoreUri;
+  const auth = storeInfo.Auth;
+  const sessionKey = uploadNode.SessionKey;
+  const vid = uploadNode.Vid;
+  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u6210\u529F: host=${uploadHost}, vid=${vid}`);
+  const uploadUrl = `https://${uploadHost}/upload/v1/${storeUri}`;
+  const crc32 = calculateCRC322(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6: ${uploadUrl}, CRC32=${crc32}`);
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Accept": "*/*",
+      "Authorization": auth,
+      "Content-CRC32": crc32,
+      "Content-Type": "application/octet-stream",
+      "Origin": "https://jimeng.jianying.com",
+      "Referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+    },
+    body: buffer
+  });
+  if (!uploadResponse.ok) {
+    const errorText = await uploadResponse.text();
+    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
+  }
+  const uploadData = await uploadResponse.json();
+  if ((uploadData == null ? void 0 : uploadData.code) !== 2e3) {
+    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: code=${uploadData == null ? void 0 : uploadData.code}, message=${uploadData == null ? void 0 : uploadData.message}`);
+  }
+  logger_default.info(`${label}\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: crc32=${(_e = uploadData.data) == null ? void 0 : _e.crc32}`);
+  const commitUrl = `${vodHost}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${spaceName}`;
+  const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const commitPayload = JSON.stringify({
+    SessionKey: sessionKey,
+    Functions: []
+  });
+  const payloadHash = import_crypto3.default.createHash("sha256").update(commitPayload, "utf8").digest("hex");
+  const commitRequestHeaders = {
+    "x-amz-date": commitTimestamp,
+    "x-amz-security-token": session_token,
+    "x-amz-content-sha256": payloadHash
+  };
+  const commitAuthorization = createSignature2(
+    "POST",
+    commitUrl,
+    commitRequestHeaders,
+    access_key_id,
+    secret_access_key,
+    session_token,
+    commitPayload,
+    "cn-north-1",
+    "vod"
+  );
+  logger_default.info(`\u63D0\u4EA4${label}\u4E0A\u4F20\u786E\u8BA4: ${commitUrl}`);
+  const commitResponse = await fetch(commitUrl, {
+    method: "POST",
+    headers: {
+      "accept": "*/*",
+      "authorization": commitAuthorization,
+      "content-type": "application/json",
+      "origin": "https://jimeng.jianying.com",
+      "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+      "x-amz-date": commitTimestamp,
+      "x-amz-security-token": session_token,
+      "x-amz-content-sha256": payloadHash
+    },
+    body: commitPayload
+  });
+  if (!commitResponse.ok) {
+    const errorText = await commitResponse.text();
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
+  }
+  const commitResult = await commitResponse.json();
+  if ((_f = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _f.Error) {
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+  }
+  if (!((_g = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _g.Results) || commitResult.Result.Results.length === 0) {
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
+  }
+  const result = commitResult.Result.Results[0];
+  if (!result.Vid) {
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11 Vid: ${JSON.stringify(result)}`);
+  }
+  const videoMeta = result.VideoMeta || {};
+  let duration = videoMeta.Duration ? Math.round(videoMeta.Duration * 1e3) : 0;
+  if (duration <= 0 && mediaType === "audio") {
+    duration = parseAudioDuration(buffer);
+    logger_default.info(`VOD \u672A\u8FD4\u56DE${label}\u65F6\u957F\uFF0C\u672C\u5730\u89E3\u6790: ${duration}ms`);
+  }
+  logger_default.info(`${label}\u4E0A\u4F20\u5B8C\u6210: vid=${result.Vid}, duration=${duration}ms`);
+  return {
+    vid: result.Vid,
+    width: videoMeta.Width || 0,
+    height: videoMeta.Height || 0,
+    duration,
+    fps: videoMeta.Fps || 0
+  };
 }
 async function fetchHighQualityVideoUrl(itemId, refreshToken) {
   var _a, _b, _c, _d, _e, _f;
@@ -4447,7 +4825,7 @@ async function generateSeedanceVideo(_model, prompt, {
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
-  let uploadedImages = [];
+  let uploadedMaterials = [];
   if (files && files.length > 0) {
     logger_default.info(`Seedance: \u5F00\u59CB\u5904\u7406 ${files.length} \u4E2A\u4E0A\u4F20\u6587\u4EF6`);
     for (let i = 0; i < files.length; i++) {
@@ -4456,67 +4834,132 @@ async function generateSeedanceVideo(_model, prompt, {
         logger_default.warn(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u65E0\u6548\uFF0C\u8DF3\u8FC7`);
         continue;
       }
+      const materialType = detectMaterialType(file);
       try {
-        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
+        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${file.originalFilename || file.filepath}`);
         const buffer = import_fs3.default.readFileSync(file.filepath);
-        const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
-        if (imageUri) {
-          uploadedImages.push({ uri: imageUri, width, height });
-          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+        if (materialType === "image") {
+          const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
+          if (imageUri) {
+            uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
+            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+          }
+        } else {
+          const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken, file.originalFilename);
+          uploadedMaterials.push({
+            type: materialType,
+            vid: vodResult.vid,
+            width: vodResult.width,
+            height: vodResult.height,
+            duration: vodResult.duration,
+            fps: vodResult.fps,
+            name: file.originalFilename || ""
+          });
+          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
         }
       } catch (error) {
         logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         }
       }
     }
   } else if (filePaths && filePaths.length > 0) {
-    logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u5F20\u56FE\u7247`);
+    logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u4E2A\u6587\u4EF6`);
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) continue;
+      const materialType = detectMaterialTypeFromUrl(filePath);
       try {
-        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u5F20\u56FE\u7247: ${filePath}`);
-        const imageUri = await uploadImageForVideo(filePath, refreshToken);
-        if (imageUri) {
-          uploadedImages.push({ uri: imageUri, width, height });
-          logger_default.info(`Seedance: \u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${filePath}`);
+        if (materialType === "image") {
+          const imageUri = await uploadImageForVideo(filePath, refreshToken);
+          if (imageUri) {
+            uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
+            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+          }
+        } else {
+          const response = await fetch(filePath);
+          if (!response.ok) throw new Error(`\u4E0B\u8F7D\u6587\u4EF6\u5931\u8D25: ${response.status}`);
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken);
+          uploadedMaterials.push({
+            type: materialType,
+            vid: vodResult.vid,
+            width: vodResult.width,
+            height: vodResult.height,
+            duration: vodResult.duration,
+            fps: vodResult.fps
+          });
+          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger_default.error(`Seedance: \u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+        logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         }
       }
     }
   }
-  if (uploadedImages.length === 0) {
-    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 \u9700\u8981\u81F3\u5C11\u4E00\u5F20\u56FE\u7247");
+  if (uploadedMaterials.length === 0) {
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 \u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u6587\u4EF6\uFF08\u56FE\u7247/\u89C6\u9891/\u97F3\u9891\uFF09");
   }
-  logger_default.info(`Seedance: \u6210\u529F\u4E0A\u4F20 ${uploadedImages.length} \u5F20\u56FE\u7247`);
-  const materialList = uploadedImages.map((img, index) => ({
-    type: "",
-    id: util_default.uuid(),
-    material_type: "image",
-    image_info: {
-      type: "image",
-      id: util_default.uuid(),
-      source_from: "upload",
-      platform_type: 1,
-      name: "",
-      image_uri: img.uri,
-      aigc_image: {
-        type: "",
-        id: util_default.uuid()
-      },
-      width: img.width,
-      height: img.height,
-      format: "",
-      uri: img.uri
+  logger_default.info(`Seedance: \u6210\u529F\u4E0A\u4F20 ${uploadedMaterials.length} \u4E2A\u6587\u4EF6`);
+  const hasVideoMaterial = uploadedMaterials.some((m) => m.type === "video");
+  const finalBenefitType = hasVideoMaterial ? `${benefitType}_with_video` : benefitType;
+  const materialList = uploadedMaterials.map((mat) => {
+    const base = { type: "", id: util_default.uuid() };
+    if (mat.type === "image") {
+      return {
+        ...base,
+        material_type: "image",
+        image_info: {
+          type: "image",
+          id: util_default.uuid(),
+          source_from: "upload",
+          platform_type: 1,
+          name: "",
+          image_uri: mat.uri,
+          aigc_image: { type: "", id: util_default.uuid() },
+          width: mat.width,
+          height: mat.height,
+          format: "",
+          uri: mat.uri
+        }
+      };
+    } else if (mat.type === "video") {
+      return {
+        ...base,
+        material_type: "video",
+        video_info: {
+          type: "video",
+          id: util_default.uuid(),
+          source_from: "upload",
+          name: mat.name || "",
+          vid: mat.vid,
+          fps: mat.fps || 0,
+          width: mat.width || 0,
+          height: mat.height || 0,
+          duration: mat.duration || 0
+        }
+      };
+    } else {
+      return {
+        ...base,
+        material_type: "audio",
+        audio_info: {
+          type: "audio",
+          id: util_default.uuid(),
+          source_from: "upload",
+          vid: mat.vid,
+          duration: mat.duration || 0,
+          name: mat.name || ""
+        }
+      };
     }
-  }));
-  const metaList = buildMetaListFromPrompt(prompt, uploadedImages.length);
+  });
+  const metaList = buildMetaListFromPrompt(prompt, uploadedMaterials);
   const componentId = util_default.uuid();
   const submitId = util_default.uuid();
   const draftVersion = MODEL_DRAFT_VERSIONS2[_model] || "3.3.9";
@@ -4541,7 +4984,7 @@ async function generateSeedanceVideo(_model, prompt, {
         extraVipFunctionKey: model,
         useVipFunctionDetailsReporterHoc: true
       },
-      materialTypes: [1]
+      materialTypes: [...new Set(uploadedMaterials.map((m) => MATERIAL_TYPE_CODE[m.type]))]
     }])
   });
   const token = await acquireToken(refreshToken);
@@ -4560,13 +5003,13 @@ async function generateSeedanceVideo(_model, prompt, {
     extend: {
       root_model: model,
       m_video_commerce_info: {
-        benefit_type: benefitType,
+        benefit_type: finalBenefitType,
         resource_id: "generate_video",
         resource_id_type: "str",
         resource_sub_type: "aigc"
       },
       m_video_commerce_info_list: [{
-        benefit_type: benefitType,
+        benefit_type: finalBenefitType,
         resource_id: "generate_video",
         resource_id_type: "str",
         resource_sub_type: "aigc"
@@ -4726,8 +5169,9 @@ async function generateSeedanceVideo(_model, prompt, {
   logger_default.info(`Seedance: \u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
   return videoUrl;
 }
-function buildMetaListFromPrompt(prompt, imageCount) {
+function buildMetaListFromPrompt(prompt, materials) {
   const metaList = [];
+  const materialCount = materials.length;
   const placeholderRegex = /@(?:图|image)?(\d+)/gi;
   let lastIndex = 0;
   let match;
@@ -4738,12 +5182,12 @@ function buildMetaListFromPrompt(prompt, imageCount) {
         metaList.push({ meta_type: "text", text: textBefore });
       }
     }
-    const imageIndex = parseInt(match[1]) - 1;
-    if (imageIndex >= 0 && imageIndex < imageCount) {
+    const materialIndex = parseInt(match[1]) - 1;
+    if (materialIndex >= 0 && materialIndex < materialCount) {
       metaList.push({
-        meta_type: "image",
+        meta_type: materials[materialIndex].type,
         text: "",
-        material_ref: { material_idx: imageIndex }
+        material_ref: { material_idx: materialIndex }
       });
     }
     lastIndex = match.index + match[0].length;
@@ -4755,23 +5199,23 @@ function buildMetaListFromPrompt(prompt, imageCount) {
     }
   }
   if (metaList.length === 0) {
-    for (let i = 0; i < imageCount; i++) {
+    for (let i = 0; i < materialCount; i++) {
       if (i === 0) {
         metaList.push({ meta_type: "text", text: "\u4F7F\u7528" });
       }
       metaList.push({
-        meta_type: "image",
+        meta_type: materials[i].type,
         text: "",
         material_ref: { material_idx: i }
       });
-      if (i < imageCount - 1) {
+      if (i < materialCount - 1) {
         metaList.push({ meta_type: "text", text: "\u548C" });
       }
     }
     if (prompt && prompt.trim()) {
-      metaList.push({ meta_type: "text", text: `\u56FE\u7247\uFF0C${prompt}` });
+      metaList.push({ meta_type: "text", text: `\u7D20\u6750\uFF0C${prompt}` });
     } else {
-      metaList.push({ meta_type: "text", text: "\u56FE\u7247\u751F\u6210\u89C6\u9891" });
+      metaList.push({ meta_type: "text", text: "\u7D20\u6750\u751F\u6210\u89C6\u9891" });
     }
   }
   return metaList;
@@ -5280,10 +5724,10 @@ var models_default = {
             "owned_by": "jimeng-free-api"
           },
           {
-            "id": "jimeng-5.0-preview",
+            "id": "jimeng-5.0",
             "object": "model",
             "owned_by": "jimeng-free-api",
-            "description": "\u5373\u68A6AI\u56FE\u50CF\u751F\u6210\u6A21\u578B 5.0 Preview \u7248\u672C\uFF08\u6700\u65B0\uFF09"
+            "description": "\u5373\u68A6AI\u56FE\u50CF\u751F\u6210\u6A21\u578B 5.0 \u7248\u672C\uFF08\u6700\u65B0\uFF09"
           },
           {
             "id": "jimeng-4.6",
