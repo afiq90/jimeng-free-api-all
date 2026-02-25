@@ -81,7 +81,7 @@ const HEALTH_CHECK_INTERVAL = 60 * 1000;
 const FETCH_TIMEOUT = 30000;
 
 const CIRCUIT_BREAKER_THRESHOLD = 3;
-const CIRCUIT_BREAKER_COOLDOWN = 60 * 1000;
+const CIRCUIT_BREAKER_COOLDOWN = 20 * 1000;
 
 const PROACTIVE_RECONNECT_DELAY = 2000;
 
@@ -124,6 +124,10 @@ class BrowserService {
     this.consecutiveFailures++;
     this.lastFailureTime = Date.now();
     logger.warn(`BrowserService: 连续失败次数: ${this.consecutiveFailures}/${CIRCUIT_BREAKER_THRESHOLD}`);
+    if (this.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+      logger.warn(`BrowserService: 熔断器已打开，启动后台恢复任务 (冷却 ${CIRCUIT_BREAKER_COOLDOWN / 1000}s 后重试)...`);
+      this.scheduleRecovery();
+    }
   }
 
   private recordSuccess(): void {
@@ -133,18 +137,30 @@ class BrowserService {
     this.consecutiveFailures = 0;
   }
 
+  private scheduleRecovery(): void {
+    setTimeout(() => {
+      if (this.isReady() || this.launching) {
+        logger.info(`BrowserService: 熔断器恢复检查：浏览器已就绪，无需重连`);
+        return;
+      }
+      logger.info(`BrowserService: 熔断器冷却结束，尝试恢复浏览器...`);
+      this.consecutiveFailures = 0;
+      this.ensureBrowser().then(() => {
+        logger.info(`BrowserService: 熔断器恢复成功`);
+      }).catch((err) => {
+        logger.error(`BrowserService: 熔断器恢复失败: ${(err as Error).message}`);
+      });
+    }, CIRCUIT_BREAKER_COOLDOWN + 1000);
+  }
+
   private proactiveReconnect(): void {
-    if (this.launching) {
-      return;
-    }
-    if (this.isCircuitOpen()) {
-      logger.warn(`BrowserService: 熔断器打开，跳过主动重连 (冷却 ${Math.round((CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.lastFailureTime)) / 1000)}s)`);
+    if (this.launching || this.isCircuitOpen()) {
       return;
     }
 
     logger.info(`BrowserService: 启动主动后台重连 (${PROACTIVE_RECONNECT_DELAY}ms 后)...`);
     setTimeout(() => {
-      if (this.isReady() || this.launching) {
+      if (this.isReady() || this.launching || this.isCircuitOpen()) {
         return;
       }
       logger.info(`BrowserService: 执行主动后台重连...`);
