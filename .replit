@@ -37,9 +37,12 @@ externalPort = 80
 [deployment]
 deploymentTarget = "vm"
 run = ["node", "--enable-source-maps", "--no-node-snapshot", "dist/index.js"]
-build = ["sh", "-c", "npm run build && npx playwright install"]
+build = ["sh", "-c", "PLAYWRIGHT_BROWSERS_PATH=/home/runner/workspace/playwright-browsers npm run build && PLAYWRIGHT_BROWSERS_PATH=/home/runner/workspace/playwright-browsers npx playwright install chromium"]
 publicDir = "dist"
 
 [userenv]
 
 [userenv.shared]
+
+[userenv.production]
+PLAYWRIGHT_BROWSERS_PATH = "/home/runner/workspace/playwright-browsers"
