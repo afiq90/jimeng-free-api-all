@@ -100,7 +100,7 @@ docker run -it -d --init --name jimeng-free-api-all \
   jimeng-free-api-all:latest
 ```
 
-### 方式二：源码安装
+### 方式二：源码安装 (Replit 部署优化版)
 
 ```bash
 # 克隆项目
@@ -112,8 +112,9 @@ cd jimeng-free-api-all
 # 安装依赖
 npm install
 
-# 安装 Chromium 浏览器（Seedance 模型需要）
-npx playwright-core install chromium --with-deps
+# 安装 Chromium 浏览器 (Replit 环境建议指定路径)
+export PLAYWRIGHT_BROWSERS_PATH=$(pwd)/playwright-browsers
+npx playwright install chromium
 
 # 开发模式
 npm run dev
@@ -121,6 +122,8 @@ npm run dev
 # 生产模式
 npm run build && npm start
 ```
+
+> **注意 (Replit 用户)**: 本项目已针对 Replit VM 部署进行了优化。部署配置会自动处理浏览器安装与路径绑定，无需手动干预。
 
 ## 使用说明
 

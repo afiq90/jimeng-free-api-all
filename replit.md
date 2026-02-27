@@ -31,6 +31,12 @@ A free API server for jimeng (即梦) AI image/video generation service. Provide
 - `/token/*` - Token management
 
 ## Recent Changes
+- 2026-02-27: Fixed Replit deployment and browser stability:
+  - Removed heavy Nix `chromium` package to avoid 9-minute bundling timeouts.
+  - Implemented pinned `PLAYWRIGHT_BROWSERS_PATH` at `/home/runner/workspace/playwright-browsers` for both build and production.
+  - Updated build command to `npm run build && npx playwright install chromium` to ensure browsers are bundled into the deployment image.
+  - Enhanced `findChromiumPath` in `browser-service.ts` to prioritize Playwright's internal `executablePath()`.
+  - Fixed build command syntax in deployment config (removed problematic `bash -c` wrapper).
 - 2026-02-20: Hardened browser-service.ts to fix browser disconnect → client hang issue:
   - Proactive background reconnect: browser relaunches immediately on disconnect instead of lazy rebuild
   - Circuit breaker pattern: after 3 consecutive failures (launch, session, or fetch), fast-fails with 503 for 60s cooldown
