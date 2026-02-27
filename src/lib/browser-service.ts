@@ -16,6 +16,16 @@ function findChromiumPath(): string {
     cachedChromiumPath = process.env.CHROMIUM_PATH;
     return cachedChromiumPath;
   }
+
+  try {
+    const playwrightPath = chromium.executablePath();
+    if (playwrightPath && fs.existsSync(playwrightPath)) {
+      logger.info(`BrowserService: 使用 Playwright 内置 Chromium: ${playwrightPath}`);
+      cachedChromiumPath = playwrightPath;
+      return cachedChromiumPath;
+    }
+  } catch {}
+
   try {
     const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
     if (whichPath && fs.existsSync(whichPath)) {
@@ -23,6 +33,7 @@ function findChromiumPath(): string {
       return cachedChromiumPath;
     }
   } catch {}
+
   try {
     const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
     if (nixChrome && fs.existsSync(nixChrome)) {
@@ -30,6 +41,7 @@ function findChromiumPath(): string {
       return cachedChromiumPath;
     }
   } catch {}
+
   const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
   for (const p of fallbacks) {
     if (fs.existsSync(p)) {

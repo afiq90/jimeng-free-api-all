@@ -4,7 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["glib", "nss", "nspr", "atk", "at-spi2-atk", "cups", "libdrm", "gtk3", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "expat", "alsa-lib", "dbus", "at-spi2-core", "xorg.libxshmfence", "libxkbcommon", "libgbm", "chromium"]
+packages = ["glib", "nss", "nspr", "atk", "at-spi2-atk", "cups", "libdrm", "gtk3", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "expat", "alsa-lib", "dbus", "at-spi2-core", "xorg.libxshmfence", "libxkbcommon", "libgbm"]
 
 [workflows]
 runButton = "Project"
@@ -37,7 +37,7 @@ externalPort = 80
 [deployment]
 deploymentTarget = "vm"
 run = ["node", "--enable-source-maps", "--no-node-snapshot", "dist/index.js"]
-build = ["npm", "run", "build"]
+build = ["sh", "-c", "npm run build && npx playwright install chromium"]
 publicDir = "dist"
 
 [userenv]

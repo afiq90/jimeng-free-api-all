@@ -995,6 +995,15 @@ function findChromiumPath() {
     return cachedChromiumPath;
   }
   try {
+    const playwrightPath = import_playwright_core.chromium.executablePath();
+    if (playwrightPath && import_fs.default.existsSync(playwrightPath)) {
+      logger_default.info(`BrowserService: \u4F7F\u7528 Playwright \u5185\u7F6E Chromium: ${playwrightPath}`);
+      cachedChromiumPath = playwrightPath;
+      return cachedChromiumPath;
+    }
+  } catch {
+  }
+  try {
     const whichPath = (0, import_child_process.execSync)("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
     if (whichPath && import_fs.default.existsSync(whichPath)) {
       cachedChromiumPath = whichPath;
