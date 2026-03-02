@@ -5848,6 +5848,41 @@ var models_default = {
 
 // src/api/routes/videos.ts
 import _16 from "lodash";
+
+// src/lib/job-store.ts
+import { v1 as uuid2 } from "uuid";
+var jobs = /* @__PURE__ */ new Map();
+var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
+var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
+setInterval(() => {
+  const now = Date.now();
+  let removed = 0;
+  for (const [id, job] of jobs.entries()) {
+    if (now - job.updated > JOB_TTL_MS) {
+      jobs.delete(id);
+      removed++;
+    }
+  }
+  if (removed > 0)
+    logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
+}, CLEANUP_INTERVAL_MS);
+function createJob() {
+  const id = uuid2();
+  const now = Math.floor(Date.now() / 1e3);
+  const job = { id, status: "pending", created: now, updated: now };
+  jobs.set(id, job);
+  return job;
+}
+function updateJob(id, update) {
+  const job = jobs.get(id);
+  if (!job) return;
+  Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
+}
+function getJob(id) {
+  return jobs.get(id);
+}
+
+// src/api/routes/videos.ts
 var videos_default = {
   prefix: "/v1/videos",
   post: {
@@ -5882,54 +5917,65 @@ var videos_default = {
       } = request2.body;
       const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
       const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      let videoUrl;
-      if (isSeedanceModel(model)) {
-        const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
-        const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
-        videoUrl = await generateSeedanceVideo(
-          model,
-          prompt,
-          {
-            ratio: seedanceRatio,
-            resolution,
-            duration: seedanceDuration,
-            filePaths: finalFilePaths,
-            files: request2.files
-          },
-          token
-        );
-      } else {
-        videoUrl = await generateVideo(
-          model,
-          prompt,
-          {
-            ratio,
-            resolution,
-            duration: finalDuration,
-            filePaths: finalFilePaths,
-            files: request2.files
-          },
-          token
-        );
-      }
-      if (response_format === "b64_json") {
-        const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
-        return {
-          created: util_default.unixTimestamp(),
-          data: [{
-            b64_json: videoBase64,
-            revised_prompt: prompt
-          }]
-        };
-      } else {
-        return {
-          created: util_default.unixTimestamp(),
-          data: [{
-            url: videoUrl,
-            revised_prompt: prompt
-          }]
-        };
-      }
+      const job = createJob();
+      logger_default.info(`Job ${job.id}: created for model=${model}`);
+      (async () => {
+        try {
+          updateJob(job.id, { status: "processing" });
+          let videoUrl;
+          if (isSeedanceModel(model)) {
+            const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
+            const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
+            videoUrl = await generateSeedanceVideo(
+              model,
+              prompt,
+              {
+                ratio: seedanceRatio,
+                resolution,
+                duration: seedanceDuration,
+                filePaths: finalFilePaths,
+                files: request2.files
+              },
+              token
+            );
+          } else {
+            videoUrl = await generateVideo(
+              model,
+              prompt,
+              {
+                ratio,
+                resolution,
+                duration: finalDuration,
+                filePaths: finalFilePaths,
+                files: request2.files
+              },
+              token
+            );
+          }
+          if (response_format === "b64_json") {
+            const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
+            updateJob(job.id, {
+              status: "completed",
+              result: { b64_json: videoBase64, revised_prompt: prompt }
+            });
+          } else {
+            updateJob(job.id, {
+              status: "completed",
+              result: { url: videoUrl, revised_prompt: prompt }
+            });
+          }
+          logger_default.info(`Job ${job.id}: completed`);
+        } catch (err) {
+          const message = (err == null ? void 0 : err.message) || String(err);
+          updateJob(job.id, { status: "failed", error: message });
+          logger_default.error(`Job ${job.id}: failed - ${message}`);
+        }
+      })();
+      return new Response({
+        id: job.id,
+        status: job.status,
+        created: job.created
+      }, { statusCode: 202 });
     }
   }
 };
@@ -5938,6 +5984,46 @@ var videos_default = {
 var video_default = {
   ...videos_default,
   prefix: "/v1/video"
+};
+
+// src/api/routes/video-jobs.ts
+var video_jobs_default = {
+  prefix: "/v1/videos",
+  get: {
+    "/jobs/:jobId": async (request2) => {
+      var _a, _b, _c;
+      const jobId = request2.params["jobId"];
+      const job = getJob(jobId);
+      if (!job) {
+        return new Response({ error: { message: `Job ${jobId} not found`, code: "job_not_found" } }, { statusCode: 404 });
+      }
+      if (job.status === "completed") {
+        return {
+          id: job.id,
+          status: job.status,
+          created: job.created,
+          data: [{
+            url: (_a = job.result) == null ? void 0 : _a.url,
+            b64_json: (_b = job.result) == null ? void 0 : _b.b64_json,
+            revised_prompt: (_c = job.result) == null ? void 0 : _c.revised_prompt
+          }]
+        };
+      }
+      if (job.status === "failed") {
+        return new Response({
+          id: job.id,
+          status: job.status,
+          created: job.created,
+          error: { message: job.error }
+        }, { statusCode: 422 });
+      }
+      return {
+        id: job.id,
+        status: job.status,
+        created: job.created
+      };
+    }
+  }
 };
 
 // src/api/routes/index.ts
@@ -5961,7 +6047,8 @@ var routes_default = [
   token_default,
   models_default,
   videos_default,
-  video_default
+  video_default,
+  video_jobs_default
 ];
 
 // src/index.ts

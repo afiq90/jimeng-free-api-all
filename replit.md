@@ -26,11 +26,20 @@ A free API server for jimeng (即梦) AI image/video generation service. Provide
 ### API Endpoints
 - `/v1/chat/completions` - Chat completions (OpenAI-compatible)
 - `/v1/images/*` - Image generation
-- `/v1/videos/*` - Video generation
+- `POST /v1/videos/generations` - Submit a video generation job (returns immediately with job ID, HTTP 202)
+- `GET /v1/videos/jobs/:jobId` - Poll job status (`pending` | `processing` | `completed` | `failed`)
 - `/ping` - Health check
 - `/token/*` - Token management
 
 ## Recent Changes
+- 2026-03-03: Refactored video generation to async job pattern to fix production memory exhaustion:
+  - `POST /v1/videos/generations` now returns immediately with a job ID (HTTP 202) instead of holding the connection open for hours
+  - Added `GET /v1/videos/jobs/:jobId` endpoint to poll job status
+  - Added `src/lib/job-store.ts` — in-memory job store with 24-hour TTL and hourly cleanup
+  - Added `src/api/routes/video-jobs.ts` — status polling route
+  - All long-running work (credit check, uploads, browser trigger, polling loop) now runs in the background
+
+
 - 2026-02-27: Fixed Replit deployment and browser stability:
   - Removed heavy Nix `chromium` package to avoid 9-minute bundling timeouts.
   - Implemented pinned `PLAYWRIGHT_BROWSERS_PATH` at `/home/runner/workspace/playwright-browsers` for both build and production.
