@@ -4,7 +4,7 @@ import Request from '@/lib/request/Request.ts';
 import Response from '@/lib/response/Response.ts';
 import { tokenSplit } from '@/api/controllers/core.ts';
 import { generateVideo, generateSeedanceVideo, isSeedanceModel, DEFAULT_MODEL } from '@/api/controllers/videos.ts';
-import { createJob, updateJob } from '@/lib/job-store.ts';
+import { createJob, updateJob, isQueueFull } from '@/lib/job-store.ts';
 import util from '@/lib/util.ts';
 import logger from '@/lib/logger.ts';
 
@@ -63,6 +63,15 @@ export default {
                 : duration;
 
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+
+            if (isQueueFull()) {
+                return new Response({
+                    error: {
+                        message: "服务器当前繁忙，请稍后再试 (Current queue is full)",
+                        code: "queue_full"
+                    }
+                }, { statusCode: 429 });
+            }
 
             const job = createJob();
             logger.info(`Job ${job.id}: created for model=${model}`);

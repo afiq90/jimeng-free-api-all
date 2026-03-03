@@ -125,6 +125,17 @@ Poll every 15–30 seconds until `status` is `completed` or `failed`.
 }
 ```
 
+**Queue full (HTTP 429):**
+```json
+{
+  "error": {
+    "message": "服务器当前繁忙，请稍后再试 (Current queue is full)",
+    "code": "queue_full"
+  }
+}
+```
+*Note: The server currently limits concurrent processing to 2 tasks to match browser capacity.*
+
 #### Job Status Values
 | Status | Meaning |
 |---|---|

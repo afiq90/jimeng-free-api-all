@@ -17,6 +17,15 @@ export interface Job {
 }
 
 const jobs = new Map<string, Job>();
+const MAX_CONCURRENT_JOBS = 2; // Match MAX_SESSIONS in browser-service
+
+export function getProcessingJobsCount(): number {
+    return Array.from(jobs.values()).filter(j => j.status === 'processing').length;
+}
+
+export function isQueueFull(): boolean {
+    return getProcessingJobsCount() >= MAX_CONCURRENT_JOBS;
+}
 
 const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;

@@ -5852,6 +5852,13 @@ import _16 from "lodash";
 // src/lib/job-store.ts
 import { v1 as uuid2 } from "uuid";
 var jobs = /* @__PURE__ */ new Map();
+var MAX_CONCURRENT_JOBS = 2;
+function getProcessingJobsCount() {
+  return Array.from(jobs.values()).filter((j) => j.status === "processing").length;
+}
+function isQueueFull() {
+  return getProcessingJobsCount() >= MAX_CONCURRENT_JOBS;
+}
 var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
 var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
 setInterval(() => {
@@ -5917,6 +5924,14 @@ var videos_default = {
       } = request2.body;
       const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
       const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      if (isQueueFull()) {
+        return new Response({
+          error: {
+            message: "\u670D\u52A1\u5668\u5F53\u524D\u7E41\u5FD9\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5 (Current queue is full)",
+            code: "queue_full"
+          }
+        }, { statusCode: 429 });
+      }
       const job = createJob();
       logger_default.info(`Job ${job.id}: created for model=${model}`);
       (async () => {
