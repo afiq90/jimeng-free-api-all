@@ -3690,6 +3690,69 @@ import { PassThrough } from "stream";
 // src/api/controllers/videos.ts
 import crypto3 from "crypto";
 import fs8 from "fs";
+
+// src/lib/job-store.ts
+import { v1 as uuid2 } from "uuid";
+var jobs = /* @__PURE__ */ new Map();
+var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
+var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
+setInterval(() => {
+  const now = Date.now();
+  let removed = 0;
+  for (const [id, job] of jobs.entries()) {
+    if (now - job.updated > JOB_TTL_MS) {
+      jobs.delete(id);
+      removed++;
+    }
+  }
+  if (removed > 0)
+    logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
+}, CLEANUP_INTERVAL_MS);
+function createJob() {
+  const id = uuid2();
+  const now = Math.floor(Date.now() / 1e3);
+  const job = { id, status: "pending", created: now, updated: now };
+  jobs.set(id, job);
+  return job;
+}
+function updateJob(id, update) {
+  const job = jobs.get(id);
+  if (!job) return;
+  Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
+}
+function getJob(id) {
+  return jobs.get(id);
+}
+var BROWSER_CONCURRENCY = 2;
+var activeBrowserSlots = 0;
+var waitQueue = [];
+function acquireBrowserSlot() {
+  return new Promise((resolve) => {
+    if (activeBrowserSlots < BROWSER_CONCURRENCY) {
+      activeBrowserSlots++;
+      logger_default.info(`BrowserSemaphore: slot acquired (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
+      resolve();
+    } else {
+      logger_default.info(`BrowserSemaphore: waiting for slot (queue length: ${waitQueue.length + 1})`);
+      waitQueue.push(() => {
+        activeBrowserSlots++;
+        logger_default.info(`BrowserSemaphore: slot acquired from queue (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
+        resolve();
+      });
+    }
+  });
+}
+function releaseBrowserSlot() {
+  activeBrowserSlots = Math.max(0, activeBrowserSlots - 1);
+  if (waitQueue.length > 0) {
+    const next = waitQueue.shift();
+    next();
+  } else {
+    logger_default.info(`BrowserSemaphore: slot released (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
+  }
+}
+
+// src/api/controllers/videos.ts
 var DEFAULT_ASSISTANT_ID3 = 513695;
 var DEFAULT_MODEL2 = "jimeng-video-3.0";
 var DEFAULT_DRAFT_VERSION = "3.2.8";
@@ -5066,15 +5129,21 @@ async function generateSeedanceVideo(_model, prompt, {
     }
   };
   logger_default.info(`Seedance: \u901A\u8FC7\u6D4F\u89C8\u5668\u4EE3\u7406\u53D1\u9001 generate \u8BF7\u6C42...`);
-  const generateResult = await browser_service_default.fetch(
-    token,
-    generateUrl,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(generateBody)
-    }
-  );
+  await acquireBrowserSlot();
+  let generateResult;
+  try {
+    generateResult = await browser_service_default.fetch(
+      token,
+      generateUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(generateBody)
+      }
+    );
+  } finally {
+    releaseBrowserSlot();
+  }
   const { ret, errmsg, data: generateData } = generateResult;
   if (ret !== void 0 && Number(ret) !== 0) {
     if (Number(ret) === 5e3) {
@@ -5848,48 +5917,6 @@ var models_default = {
 
 // src/api/routes/videos.ts
 import _16 from "lodash";
-
-// src/lib/job-store.ts
-import { v1 as uuid2 } from "uuid";
-var jobs = /* @__PURE__ */ new Map();
-var MAX_CONCURRENT_JOBS = 2;
-function isQueueFull() {
-  const activeStartingJobs = Array.from(jobs.values()).filter(
-    (j) => j.status === "processing" && Date.now() / 1e3 - j.updated < 300
-  ).length;
-  return activeStartingJobs >= MAX_CONCURRENT_JOBS;
-}
-var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
-var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
-setInterval(() => {
-  const now = Date.now();
-  let removed = 0;
-  for (const [id, job] of jobs.entries()) {
-    if (now - job.updated > JOB_TTL_MS) {
-      jobs.delete(id);
-      removed++;
-    }
-  }
-  if (removed > 0)
-    logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
-}, CLEANUP_INTERVAL_MS);
-function createJob() {
-  const id = uuid2();
-  const now = Math.floor(Date.now() / 1e3);
-  const job = { id, status: "pending", created: now, updated: now };
-  jobs.set(id, job);
-  return job;
-}
-function updateJob(id, update) {
-  const job = jobs.get(id);
-  if (!job) return;
-  Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
-}
-function getJob(id) {
-  return jobs.get(id);
-}
-
-// src/api/routes/videos.ts
 var videos_default = {
   prefix: "/v1/videos",
   post: {
@@ -5924,14 +5951,6 @@ var videos_default = {
       } = request2.body;
       const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
       const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      if (isQueueFull()) {
-        return new Response({
-          error: {
-            message: "\u670D\u52A1\u5668\u5F53\u524D\u7E41\u5FD9\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5 (Current queue is full)",
-            code: "queue_full"
-          }
-        }, { statusCode: 429 });
-      }
       const job = createJob();
       logger_default.info(`Job ${job.id}: created for model=${model}`);
       (async () => {

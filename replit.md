@@ -125,17 +125,6 @@ Poll every 15–30 seconds until `status` is `completed` or `failed`.
 }
 ```
 
-**Queue full (HTTP 429):**
-```json
-{
-  "error": {
-    "message": "服务器当前繁忙，请稍后再试 (Current queue is full)",
-    "code": "queue_full"
-  }
-}
-```
-*Note: The server currently limits concurrent processing to 2 tasks to match browser capacity.*
-
 #### Job Status Values
 | Status | Meaning |
 |---|---|
@@ -191,6 +180,12 @@ The async job pattern fixes this by returning a job ID immediately and running a
   - Added `src/lib/job-store.ts` — in-memory job store with 24h TTL and hourly cleanup
   - Added `src/api/routes/video-jobs.ts` — status polling route
   - Root cause fixed: production memory exhaustion from long-lived HTTP connections
+  - Added precise browser semaphore (`acquireBrowserSlot` / `releaseBrowserSlot`) in `job-store.ts`:
+    - Limits concurrent Chromium usage to 2 (matching `MAX_SESSIONS` in `browser-service.ts`)
+    - Semaphore is held for only 10–30 seconds (the browser trigger phase only)
+    - Jobs waiting for a browser slot queue up and proceed as soon as one is free
+    - The long polling phase (hours) runs freely with no slot held — unlimited concurrency
+    - No upfront 429 rejection — job submissions are always accepted instantly
 
 - **2026-02-27**: Fixed Replit deployment and browser stability:
   - Removed heavy Nix `chromium` package to avoid 9-minute bundling timeouts

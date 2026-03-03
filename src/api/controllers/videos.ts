@@ -8,6 +8,7 @@ import util from "@/lib/util.ts";
 import { getCredit, receiveCredit, request, DEFAULT_ASSISTANT_ID as CORE_ASSISTANT_ID, WEB_ID, acquireToken } from "./core.ts";
 import logger from "@/lib/logger.ts";
 import browserService from "@/lib/browser-service.ts";
+import { acquireBrowserSlot, releaseBrowserSlot } from "@/lib/job-store.ts";
 
 const DEFAULT_ASSISTANT_ID = 513695;
 export const DEFAULT_MODEL = "jimeng-video-3.0";
@@ -1808,15 +1809,21 @@ export async function generateSeedanceVideo(
   };
 
   logger.info(`Seedance: 通过浏览器代理发送 generate 请求...`);
-  const generateResult = await browserService.fetch(
-    token,
-    generateUrl,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(generateBody),
-    }
-  );
+  await acquireBrowserSlot();
+  let generateResult;
+  try {
+    generateResult = await browserService.fetch(
+      token,
+      generateUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(generateBody),
+      }
+    );
+  } finally {
+    releaseBrowserSlot();
+  }
 
   // 检查浏览器代理返回的结果
   const { ret, errmsg, data: generateData } = generateResult;
