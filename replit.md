@@ -78,6 +78,16 @@ Request body is unchanged from the previous synchronous API.
 
 Poll every 15–30 seconds until `status` is `completed` or `failed`.
 
+**While waiting in queue (New):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "created": 1772482188,
+  "queue_position": 1
+}
+```
+
 **While processing:**
 ```json
 {
@@ -174,7 +184,7 @@ The async job pattern fixes this by returning a job ID immediately and running a
 
 ## Recent Changes
 
-- **2026-03-03**: Refactored video generation to async job pattern:
+- **2026-03-03**: Refactored video generation to async job pattern to fix production memory exhaustion:
   - `POST /v1/videos/generations` returns immediately with job ID (HTTP 202)
   - Added `GET /v1/videos/jobs/:jobId` polling endpoint
   - Added `src/lib/job-store.ts` — in-memory job store with 24h TTL and hourly cleanup
@@ -184,6 +194,7 @@ The async job pattern fixes this by returning a job ID immediately and running a
     - Limits concurrent Chromium usage to 2 (matching `MAX_SESSIONS` in `browser-service.ts`)
     - Semaphore is held for only 10–30 seconds (the browser trigger phase only)
     - Jobs waiting for a browser slot queue up and proceed as soon as one is free
+    - Added `queue_position` indicator to polling response for pending jobs
     - The long polling phase (hours) runs freely with no slot held — unlimited concurrency
     - No upfront 429 rejection — job submissions are always accepted instantly
 
