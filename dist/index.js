@@ -3726,27 +3726,36 @@ function getJob(id) {
 var BROWSER_CONCURRENCY = 2;
 var activeBrowserSlots = 0;
 var waitQueue = [];
-function acquireBrowserSlot() {
+function updateQueuePositions() {
+  waitQueue.forEach((item, index) => {
+    const job = jobs.get(item.id);
+    if (job) {
+      job.queuePosition = index + 1;
+      job.updated = Math.floor(Date.now() / 1e3);
+    }
+  });
+}
+function acquireBrowserSlot(jobId2) {
   return new Promise((resolve) => {
-    if (activeBrowserSlots < BROWSER_CONCURRENCY) {
+    if (activeBrowserSlots < BROWSER_CONCURRENCY && waitQueue.length === 0) {
       activeBrowserSlots++;
       logger_default.info(`BrowserSemaphore: slot acquired (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
       resolve();
     } else {
-      logger_default.info(`BrowserSemaphore: waiting for slot (queue length: ${waitQueue.length + 1})`);
-      waitQueue.push(() => {
-        activeBrowserSlots++;
-        logger_default.info(`BrowserSemaphore: slot acquired from queue (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
-        resolve();
-      });
+      logger_default.info(`BrowserSemaphore: job ${jobId2} waiting for slot (queue length: ${waitQueue.length + 1})`);
+      waitQueue.push({ id: jobId2, resolve });
+      updateQueuePositions();
     }
   });
 }
 function releaseBrowserSlot() {
   activeBrowserSlots = Math.max(0, activeBrowserSlots - 1);
   if (waitQueue.length > 0) {
-    const next = waitQueue.shift();
-    next();
+    const { id, resolve } = waitQueue.shift();
+    const job = jobs.get(id);
+    if (job) delete job.queuePosition;
+    updateQueuePositions();
+    resolve();
   } else {
     logger_default.info(`BrowserSemaphore: slot released (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
   }
@@ -5129,7 +5138,7 @@ async function generateSeedanceVideo(_model, prompt, {
     }
   };
   logger_default.info(`Seedance: \u901A\u8FC7\u6D4F\u89C8\u5668\u4EE3\u7406\u53D1\u9001 generate \u8BF7\u6C42...`);
-  await acquireBrowserSlot();
+  await acquireBrowserSlot(jobId);
   let generateResult;
   try {
     generateResult = await browser_service_default.fetch(
@@ -6026,10 +6035,10 @@ var video_jobs_default = {
   get: {
     "/jobs/:jobId": async (request2) => {
       var _a, _b, _c;
-      const jobId = request2.params["jobId"];
-      const job = getJob(jobId);
+      const jobId2 = request2.params["jobId"];
+      const job = getJob(jobId2);
       if (!job) {
-        return new Response({ error: { message: `Job ${jobId} not found`, code: "job_not_found" } }, { statusCode: 404 });
+        return new Response({ error: { message: `Job ${jobId2} not found`, code: "job_not_found" } }, { statusCode: 404 });
       }
       if (job.status === "completed") {
         return {
@@ -6054,7 +6063,8 @@ var video_jobs_default = {
       return {
         id: job.id,
         status: job.status,
-        created: job.created
+        created: job.created,
+        queue_position: job.queuePosition
       };
     }
   }

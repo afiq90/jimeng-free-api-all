@@ -41,7 +41,8 @@ export default {
             return {
                 id: job.id,
                 status: job.status,
-                created: job.created
+                created: job.created,
+                queue_position: job.queuePosition
             };
         }
 

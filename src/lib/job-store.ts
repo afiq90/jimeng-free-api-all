@@ -8,6 +8,7 @@ export interface Job {
     status: JobStatus;
     created: number;
     updated: number;
+    queuePosition?: number;
     result?: {
         url?: string;
         b64_json?: string;
@@ -53,27 +54,30 @@ export function getJob(id: string): Job | undefined {
 }
 
 // --- Browser Semaphore ---
-// Limits concurrent browser usage to 2 (matching MAX_SESSIONS in browser-service.ts).
-// Jobs wait in a queue instead of being rejected — the browser phase only lasts 10–30 seconds,
-// so any waiting job is unblocked quickly once the current browser call finishes.
-
 const BROWSER_CONCURRENCY = 2;
 let activeBrowserSlots = 0;
-const waitQueue: Array<() => void> = [];
+const waitQueue: Array<{ id: string; resolve: () => void }> = [];
 
-export function acquireBrowserSlot(): Promise<void> {
+function updateQueuePositions() {
+    waitQueue.forEach((item, index) => {
+        const job = jobs.get(item.id);
+        if (job) {
+            job.queuePosition = index + 1;
+            job.updated = Math.floor(Date.now() / 1000);
+        }
+    });
+}
+
+export function acquireBrowserSlot(jobId: string): Promise<void> {
     return new Promise(resolve => {
-        if (activeBrowserSlots < BROWSER_CONCURRENCY) {
+        if (activeBrowserSlots < BROWSER_CONCURRENCY && waitQueue.length === 0) {
             activeBrowserSlots++;
             logger.info(`BrowserSemaphore: slot acquired (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
             resolve();
         } else {
-            logger.info(`BrowserSemaphore: waiting for slot (queue length: ${waitQueue.length + 1})`);
-            waitQueue.push(() => {
-                activeBrowserSlots++;
-                logger.info(`BrowserSemaphore: slot acquired from queue (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
-                resolve();
-            });
+            logger.info(`BrowserSemaphore: job ${jobId} waiting for slot (queue length: ${waitQueue.length + 1})`);
+            waitQueue.push({ id: jobId, resolve });
+            updateQueuePositions();
         }
     });
 }
@@ -81,8 +85,11 @@ export function acquireBrowserSlot(): Promise<void> {
 export function releaseBrowserSlot(): void {
     activeBrowserSlots = Math.max(0, activeBrowserSlots - 1);
     if (waitQueue.length > 0) {
-        const next = waitQueue.shift();
-        next();
+        const { id, resolve } = waitQueue.shift()!;
+        const job = jobs.get(id);
+        if (job) delete job.queuePosition;
+        updateQueuePositions();
+        resolve();
     } else {
         logger.info(`BrowserSemaphore: slot released (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
     }
