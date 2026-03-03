@@ -24,7 +24,13 @@ export function getProcessingJobsCount(): number {
 }
 
 export function isQueueFull(): boolean {
-    return getProcessingJobsCount() >= MAX_CONCURRENT_JOBS;
+    // Only block if we have 2 jobs that are actively using the browser/initial steps.
+    // Once a job is in the long-polling phase, it uses very little memory.
+    // We can allow more total jobs, but limit the "heavy" startup phase.
+    const activeStartingJobs = Array.from(jobs.values()).filter(j => 
+        j.status === 'processing' && (Date.now() / 1000 - j.updated < 300)
+    ).length;
+    return activeStartingJobs >= MAX_CONCURRENT_JOBS;
 }
 
 const JOB_TTL_MS = 24 * 60 * 60 * 1000;

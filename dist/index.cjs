@@ -5877,11 +5877,11 @@ var import_lodash16 = __toESM(require("lodash"), 1);
 var import_uuid2 = require("uuid");
 var jobs = /* @__PURE__ */ new Map();
 var MAX_CONCURRENT_JOBS = 2;
-function getProcessingJobsCount() {
-  return Array.from(jobs.values()).filter((j) => j.status === "processing").length;
-}
 function isQueueFull() {
-  return getProcessingJobsCount() >= MAX_CONCURRENT_JOBS;
+  const activeStartingJobs = Array.from(jobs.values()).filter(
+    (j) => j.status === "processing" && Date.now() / 1e3 - j.updated < 300
+  ).length;
+  return activeStartingJobs >= MAX_CONCURRENT_JOBS;
 }
 var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
 var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
