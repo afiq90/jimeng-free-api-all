@@ -1809,7 +1809,7 @@ export async function generateSeedanceVideo(
   };
 
   logger.info(`Seedance: 通过浏览器代理发送 generate 请求...`);
-  await acquireBrowserSlot(jobId);
+  await acquireBrowserSlot(token.substring(0, 8));
   let generateResult;
   try {
     generateResult = await browserService.fetch(
