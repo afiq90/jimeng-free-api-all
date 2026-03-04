@@ -1842,7 +1842,7 @@ export async function generateSeedanceVideo(
   // 轮询获取结果（与普通视频相同的逻辑）
   let status = 20, failCode, item_list = [];
   let retryCount = 0;
-  const maxRetries = 60;
+  const maxRetries = 1080;
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
 

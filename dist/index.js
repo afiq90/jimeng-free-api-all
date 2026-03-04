@@ -3694,13 +3694,13 @@ import fs8 from "fs";
 // src/lib/job-store.ts
 import { v1 as uuid2 } from "uuid";
 var jobs = /* @__PURE__ */ new Map();
-var JOB_TTL_MS = 24 * 60 * 60 * 1e3;
+var JOB_TTL_SECONDS = 24 * 60 * 60;
 var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
 setInterval(() => {
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1e3);
   let removed = 0;
   for (const [id, job] of jobs.entries()) {
-    if (now - job.updated > JOB_TTL_MS) {
+    if (now - job.updated > JOB_TTL_SECONDS) {
       jobs.delete(id);
       removed++;
     }
@@ -5166,7 +5166,7 @@ async function generateSeedanceVideo(_model, prompt, {
     throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
   let status = 20, failCode, item_list = [];
   let retryCount = 0;
-  const maxRetries = 60;
+  const maxRetries = 1080;
   await new Promise((resolve) => setTimeout(resolve, 5e3));
   logger_default.info(`Seedance: \u5F00\u59CB\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0C\u5386\u53F2ID: ${historyId}`);
   while (status === 20 && retryCount < maxRetries) {

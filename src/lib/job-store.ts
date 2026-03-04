@@ -19,14 +19,14 @@ export interface Job {
 
 const jobs = new Map<string, Job>();
 
-const JOB_TTL_MS = 24 * 60 * 60 * 1000;
+const JOB_TTL_SECONDS = 24 * 60 * 60;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 setInterval(() => {
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
     let removed = 0;
     for (const [id, job] of jobs.entries()) {
-        if (now - job.updated > JOB_TTL_MS) {
+        if (now - job.updated > JOB_TTL_SECONDS) {
             jobs.delete(id);
             removed++;
         }
