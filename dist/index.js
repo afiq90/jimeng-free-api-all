@@ -3691,6 +3691,70 @@ import { PassThrough } from "stream";
 import crypto3 from "crypto";
 import fs8 from "fs";
 
+// src/lib/db.ts
+import { Pool } from "pg";
+var pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+  idleTimeoutMillis: 3e4,
+  connectionTimeoutMillis: 5e3
+});
+pool.on("error", (err) => {
+  logger_default.error(`DB: pool error: ${err.message}`);
+});
+async function saveJobToDb(id, status, created) {
+  try {
+    await pool.query(
+      `INSERT INTO video_jobs (id, status, created_at, updated_at)
+             VALUES ($1, $2, $3, $3)
+             ON CONFLICT (id) DO NOTHING`,
+      [id, status, created]
+    );
+  } catch (err) {
+    logger_default.error(`DB: saveJobToDb failed for ${id}: ${err.message}`);
+  }
+}
+async function updateJobInDb(id, update) {
+  const now = Math.floor(Date.now() / 1e3);
+  const keys = Object.keys(update);
+  if (keys.length === 0) return;
+  const setClauses = keys.map((key, i) => `${key} = $${i + 2}`).join(", ");
+  const values = Object.values(update);
+  try {
+    await pool.query(
+      `UPDATE video_jobs SET ${setClauses}, updated_at = $1 WHERE id = $${values.length + 2}`,
+      [now, ...values, id]
+    );
+  } catch (err) {
+    logger_default.error(`DB: updateJobInDb failed for ${id}: ${err.message}`);
+  }
+}
+async function getJobFromDb(id) {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs WHERE id = $1`,
+      [id]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    logger_default.error(`DB: getJobFromDb failed for ${id}: ${err.message}`);
+    return null;
+  }
+}
+async function getProcessingJobsWithHistoryId() {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs
+             WHERE status = 'processing' AND jimeng_history_id IS NOT NULL
+             ORDER BY created_at ASC`
+    );
+    return result.rows;
+  } catch (err) {
+    logger_default.error(`DB: getProcessingJobsWithHistoryId failed: ${err.message}`);
+    return [];
+  }
+}
+
 // src/lib/job-store.ts
 import { v1 as uuid2 } from "uuid";
 var jobs = /* @__PURE__ */ new Map();
@@ -3708,20 +3772,61 @@ setInterval(() => {
   if (removed > 0)
     logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
 }, CLEANUP_INTERVAL_MS);
+function dbJobToJob(dbJob) {
+  const job = {
+    id: dbJob.id,
+    status: dbJob.status,
+    created: dbJob.created_at,
+    updated: dbJob.updated_at
+  };
+  if (dbJob.error_message) {
+    job.error = dbJob.error_message;
+  }
+  if (dbJob.result_url || dbJob.result_b64_json) {
+    job.result = {
+      url: dbJob.result_url || void 0,
+      b64_json: dbJob.result_b64_json || void 0,
+      revised_prompt: dbJob.result_revised_prompt || void 0
+    };
+  }
+  return job;
+}
 function createJob() {
   const id = uuid2();
   const now = Math.floor(Date.now() / 1e3);
   const job = { id, status: "pending", created: now, updated: now };
   jobs.set(id, job);
+  saveJobToDb(id, "pending", now).catch(
+    (err) => logger_default.error(`JobStore: failed to persist job ${id} to DB: ${err.message}`)
+  );
   return job;
 }
 function updateJob(id, update) {
+  var _a, _b, _c;
   const job = jobs.get(id);
-  if (!job) return;
-  Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
+  if (job) {
+    Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
+  }
+  const dbUpdate = {};
+  if (update.status) dbUpdate.status = update.status;
+  if (update.error) dbUpdate.error_message = update.error;
+  if ((_a = update.result) == null ? void 0 : _a.url) dbUpdate.result_url = update.result.url;
+  if ((_b = update.result) == null ? void 0 : _b.b64_json) dbUpdate.result_b64_json = update.result.b64_json;
+  if ((_c = update.result) == null ? void 0 : _c.revised_prompt) dbUpdate.result_revised_prompt = update.result.revised_prompt;
+  if (Object.keys(dbUpdate).length > 0) {
+    updateJobInDb(id, dbUpdate).catch(
+      (err) => logger_default.error(`JobStore: failed to sync update for job ${id} to DB: ${err.message}`)
+    );
+  }
 }
-function getJob(id) {
-  return jobs.get(id);
+async function getJob(id) {
+  const inMemory = jobs.get(id);
+  if (inMemory) return inMemory;
+  const dbJob = await getJobFromDb(id);
+  if (!dbJob) return void 0;
+  const job = dbJobToJob(dbJob);
+  jobs.set(id, job);
+  return job;
 }
 var BROWSER_CONCURRENCY = 2;
 var activeBrowserSlots = 0;
@@ -4497,14 +4602,59 @@ async function fetchHighQualityVideoUrl(itemId, refreshToken) {
     return null;
   }
 }
+async function checkVideoJobStatus(historyId, refreshToken) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q;
+  try {
+    let result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
+      data: { history_ids: [historyId] }
+    });
+    let historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId];
+    if (!historyData) {
+      try {
+        const alt = await request("post", "/mweb/v1/get_history_records", refreshToken, {
+          data: { history_record_ids: [historyId] }
+        });
+        historyData = (_b = alt.history_records) == null ? void 0 : _b[0];
+      } catch (_17) {
+      }
+    }
+    if (!historyData) {
+      return { status: "processing" };
+    }
+    const status = historyData.status;
+    const failCode = historyData.fail_code;
+    const item_list = historyData.item_list || [];
+    if (status === 30) {
+      const error = failCode === 2038 ? "\u5185\u5BB9\u88AB\u8FC7\u6EE4" : `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`;
+      return { status: "failed", error };
+    }
+    if (status === 20) {
+      return { status: "processing" };
+    }
+    const itemId = ((_c = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _c.item_id) || ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.id) || ((_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.local_item_id) || ((_g = (_f = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _f.common_attr) == null ? void 0 : _g.id);
+    if (itemId) {
+      try {
+        const hqUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
+        if (hqUrl) return { status: "completed", url: hqUrl };
+      } catch (e) {
+        logger_default.warn(`checkVideoJobStatus: HQ URL fetch failed for ${historyId}: ${e.message}`);
+      }
+    }
+    const videoUrl = ((_k = (_j = (_i = (_h = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _h.video) == null ? void 0 : _i.transcoded_video) == null ? void 0 : _j.origin) == null ? void 0 : _k.video_url) || ((_m = (_l = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _l.video) == null ? void 0 : _m.play_url) || ((_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.video) == null ? void 0 : _o.download_url) || ((_q = (_p = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _p.video) == null ? void 0 : _q.url);
+    if (videoUrl) return { status: "completed", url: videoUrl };
+    return { status: "failed", error: "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL" };
+  } catch (err) {
+    logger_default.error(`checkVideoJobStatus: API error for historyId=${historyId}: ${err.message}`);
+    return { status: "processing" };
+  }
+}
 async function generateVideo(_model, prompt, {
   ratio = "1:1",
   resolution = "720p",
   duration = 5,
   filePaths = [],
   files = []
-}, refreshToken) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+}, refreshToken, jobId) {
   const model = getModel2(_model);
   const { width, height } = resolveVideoResolution(resolution, ratio);
   logger_default.info(`\u4F7F\u7528\u6A21\u578B: ${_model} \u6620\u5C04\u6A21\u578B: ${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F: ${duration}\u79D2`);
@@ -4746,125 +4896,13 @@ async function generateVideo(_model, prompt, {
   const historyId = aigc_data.history_record_id;
   if (!historyId)
     throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
-  let status = 20, failCode, item_list = [];
-  let retryCount = 0;
-  const maxRetries = 60;
-  await new Promise((resolve) => setTimeout(resolve, 5e3));
-  logger_default.info(`\u5F00\u59CB\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0C\u5386\u53F2ID: ${historyId}\uFF0C\u6700\u5927\u91CD\u8BD5\u6B21\u6570: ${maxRetries}`);
-  logger_default.info(`\u5373\u68A6\u5B98\u7F51API\u5730\u5740: https://jimeng.jianying.com/mweb/v1/get_history_by_ids`);
-  logger_default.info(`\u89C6\u9891\u751F\u6210\u8BF7\u6C42\u5DF2\u53D1\u9001\uFF0C\u8BF7\u540C\u65F6\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B: https://jimeng.jianying.com/ai-tool/video/generate`);
-  while (status === 20 && retryCount < maxRetries) {
-    try {
-      const requestUrl = "/mweb/v1/get_history_by_ids";
-      const requestData = {
-        history_ids: [historyId]
-      };
-      let result;
-      let useAlternativeApi = retryCount > 10 && retryCount % 2 === 0;
-      if (useAlternativeApi) {
-        logger_default.info(`\u5C1D\u8BD5\u5907\u7528API\u8BF7\u6C42\u65B9\u5F0F\uFF0CURL: ${requestUrl}, \u5386\u53F2ID: ${historyId}, \u91CD\u8BD5\u6B21\u6570: ${retryCount + 1}/${maxRetries}`);
-        const alternativeRequestData = {
-          history_record_ids: [historyId]
-        };
-        result = await request("post", "/mweb/v1/get_history_records", refreshToken, {
-          data: alternativeRequestData
-        });
-        logger_default.info(`\u5907\u7528API\u54CD\u5E94\u6458\u8981: ${JSON.stringify(result).substring(0, 500)}...`);
-      } else {
-        logger_default.info(`\u53D1\u9001\u8BF7\u6C42\u83B7\u53D6\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0CURL: ${requestUrl}, \u5386\u53F2ID: ${historyId}, \u91CD\u8BD5\u6B21\u6570: ${retryCount + 1}/${maxRetries}`);
-        result = await request("post", requestUrl, refreshToken, {
-          data: requestData
-        });
-        const responseStr = JSON.stringify(result);
-        logger_default.info(`\u6807\u51C6API\u54CD\u5E94\u6458\u8981: ${responseStr.substring(0, 300)}...`);
-      }
-      let historyData;
-      if (useAlternativeApi && result.history_records && result.history_records.length > 0) {
-        historyData = result.history_records[0];
-        logger_default.info(`\u4ECE\u5907\u7528API\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
-      } else if (result.history_list && result.history_list.length > 0) {
-        historyData = result.history_list[0];
-        logger_default.info(`\u4ECE\u6807\u51C6API\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
-      } else if (result[historyId]) {
-        historyData = result[historyId];
-        logger_default.info(`\u4ECEhistoryId\u952E\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
-      } else {
-        logger_default.warn(`\u5386\u53F2\u8BB0\u5F55\u4E0D\u5B58\u5728\uFF0C\u91CD\u8BD5\u4E2D (${retryCount + 1}/${maxRetries})... \u5386\u53F2ID: ${historyId}`);
-        logger_default.info(`\u8BF7\u540C\u65F6\u5728\u5373\u68A6\u5B98\u7F51\u68C0\u67E5\u89C6\u9891\u662F\u5426\u5DF2\u751F\u6210: https://jimeng.jianying.com/ai-tool/video/generate`);
-        retryCount++;
-        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
-        logger_default.info(`\u7B49\u5F85 ${waitTime}ms \u540E\u8FDB\u884C\u7B2C ${retryCount + 1} \u6B21\u91CD\u8BD5`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-        continue;
-      }
-      logger_default.info(`\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55\u7ED3\u679C: ${JSON.stringify(historyData)}`);
-      status = historyData.status;
-      failCode = historyData.fail_code;
-      item_list = historyData.item_list || [];
-      logger_default.info(`\u89C6\u9891\u751F\u6210\u72B6\u6001: ${status}, \u5931\u8D25\u4EE3\u7801: ${failCode || "\u65E0"}, \u9879\u76EE\u5217\u8868\u957F\u5EA6: ${item_list.length}`);
-      let tempVideoUrl = (_d = (_c = (_b = (_a = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _a.video) == null ? void 0 : _b.transcoded_video) == null ? void 0 : _c.origin) == null ? void 0 : _d.video_url;
-      if (!tempVideoUrl) {
-        tempVideoUrl = ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.video) == null ? void 0 : _f.play_url) || ((_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.download_url) || ((_j = (_i = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _i.video) == null ? void 0 : _j.url);
-      }
-      if (tempVideoUrl) {
-        logger_default.info(`\u68C0\u6D4B\u5230\u89C6\u9891URL: ${tempVideoUrl}`);
-      }
-      if (status === 30) {
-        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
-        error.historyId = historyId;
-        throw error;
-      }
-      if (status === 20) {
-        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
-        logger_default.info(`\u89C6\u9891\u751F\u6210\u4E2D\uFF0C\u72B6\u6001\u7801: ${status}\uFF0C\u7B49\u5F85 ${waitTime}ms \u540E\u7EE7\u7EED\u67E5\u8BE2`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
-    } catch (error) {
-      logger_default.error(`\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\u51FA\u9519: ${error.message}`);
-      retryCount++;
-      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
-    }
-  }
-  if (retryCount >= maxRetries && status === 20) {
-    logger_default.error(`\u89C6\u9891\u751F\u6210\u8D85\u65F6\uFF0C\u5DF2\u5C1D\u8BD5 ${retryCount} \u6B21\uFF0C\u603B\u8017\u65F6\u7EA6 ${Math.floor(retryCount * 2e3 / 1e3 / 60)} \u5206\u949F`);
-    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u83B7\u53D6\u89C6\u9891\u751F\u6210\u7ED3\u679C\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B\u60A8\u7684\u89C6\u9891");
-    error.historyId = historyId;
-    throw error;
-  }
-  const itemId = ((_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.item_id) || ((_l = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _l.id) || ((_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.local_item_id) || ((_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.common_attr) == null ? void 0 : _o.id);
-  if (itemId) {
-    try {
-      const hqVideoUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
-      if (hqVideoUrl) {
-        logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF08\u9AD8\u8D28\u91CF\uFF09\uFF0CURL: ${hqVideoUrl}`);
-        return hqVideoUrl;
-      }
-    } catch (error) {
-      logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u4F5C\u4E3A\u56DE\u9000: ${error.message}`);
-    }
-  } else {
-    logger_default.warn(`\u672A\u80FD\u4ECEitem_list\u4E2D\u63D0\u53D6item_id\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u3002item_list[0]\u952E: ${(item_list == null ? void 0 : item_list[0]) ? Object.keys(item_list[0]).join(", ") : "\u65E0"}`);
-  }
-  let videoUrl = (_s = (_r = (_q = (_p = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _p.video) == null ? void 0 : _q.transcoded_video) == null ? void 0 : _r.origin) == null ? void 0 : _s.video_url;
-  if (!videoUrl) {
-    if ((_u = (_t = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _t.video) == null ? void 0 : _u.play_url) {
-      videoUrl = item_list[0].video.play_url;
-      logger_default.info(`\u4ECEplay_url\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
-    } else if ((_w = (_v = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _v.video) == null ? void 0 : _w.download_url) {
-      videoUrl = item_list[0].video.download_url;
-      logger_default.info(`\u4ECEdownload_url\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
-    } else if ((_y = (_x = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _x.video) == null ? void 0 : _y.url) {
-      videoUrl = item_list[0].video.url;
-      logger_default.info(`\u4ECEurl\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
-    } else {
-      logger_default.error(`\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL\uFF0Citem_list: ${JSON.stringify(item_list)}`);
-      const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL\uFF0C\u8BF7\u7A0D\u540E\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B");
-      error.historyId = historyId;
-      throw error;
-    }
-  }
-  logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
-  return videoUrl;
+  logger_default.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
+  await updateJobInDb(jobId, {
+    jimeng_history_id: historyId,
+    refresh_token: refreshToken,
+    model: _model
+  });
+  return null;
 }
 async function generateSeedanceVideo(_model, prompt, {
   ratio = "4:3",
@@ -4872,8 +4910,7 @@ async function generateSeedanceVideo(_model, prompt, {
   duration = 4,
   filePaths = [],
   files = []
-}, refreshToken) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+}, refreshToken, jobId) {
   const model = getModel2(_model);
   const benefitType = SEEDANCE_BENEFIT_TYPE_MAP[_model] || "dreamina_video_seedance_20_pro";
   const actualDuration = duration || 4;
@@ -5164,73 +5201,13 @@ async function generateSeedanceVideo(_model, prompt, {
   const historyId = aigc_data.history_record_id;
   if (!historyId)
     throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
-  let status = 20, failCode, item_list = [];
-  let retryCount = 0;
-  const maxRetries = 1080;
-  await new Promise((resolve) => setTimeout(resolve, 5e3));
-  logger_default.info(`Seedance: \u5F00\u59CB\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0C\u5386\u53F2ID: ${historyId}`);
-  while (status === 20 && retryCount < maxRetries) {
-    try {
-      const result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
-        data: { history_ids: [historyId] }
-      });
-      const responseStr = JSON.stringify(result);
-      logger_default.info(`Seedance: \u8F6E\u8BE2\u54CD\u5E94\u6458\u8981: ${responseStr.substring(0, 300)}...`);
-      let historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId];
-      if (!historyData) {
-        retryCount++;
-        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-        continue;
-      }
-      status = historyData.status;
-      failCode = historyData.fail_code;
-      item_list = historyData.item_list || [];
-      logger_default.info(`Seedance: \u72B6\u6001=${status}, \u5931\u8D25\u7801=${failCode || "\u65E0"}`);
-      if (status === 30) {
-        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
-        error.historyId = historyId;
-        throw error;
-      }
-      if (status === 20) {
-        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
-      retryCount++;
-    } catch (error) {
-      if (error instanceof APIException) throw error;
-      logger_default.error(`Seedance: \u8F6E\u8BE2\u51FA\u9519: ${error.message}`);
-      retryCount++;
-      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
-    }
-  }
-  if (retryCount >= maxRetries && status === 20) {
-    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u89C6\u9891\u751F\u6210\u8D85\u65F6");
-    error.historyId = historyId;
-    throw error;
-  }
-  const seedanceItemId = ((_b = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _b.item_id) || ((_c = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _c.id) || ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.local_item_id) || ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.common_attr) == null ? void 0 : _f.id);
-  if (seedanceItemId) {
-    try {
-      const hqVideoUrl = await fetchHighQualityVideoUrl(String(seedanceItemId), refreshToken);
-      if (hqVideoUrl) {
-        logger_default.info(`Seedance: \u89C6\u9891\u751F\u6210\u6210\u529F\uFF08\u9AD8\u8D28\u91CF\uFF09\uFF0CURL: ${hqVideoUrl}`);
-        return hqVideoUrl;
-      }
-    } catch (error) {
-      logger_default.warn(`Seedance: \u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u4F5C\u4E3A\u56DE\u9000: ${error.message}`);
-    }
-  } else {
-    logger_default.warn(`Seedance: \u672A\u80FD\u4ECEitem_list\u4E2D\u63D0\u53D6item_id\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u3002item_list[0]\u952E: ${(item_list == null ? void 0 : item_list[0]) ? Object.keys(item_list[0]).join(", ") : "\u65E0"}`);
-  }
-  let videoUrl = ((_j = (_i = (_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.transcoded_video) == null ? void 0 : _i.origin) == null ? void 0 : _j.video_url) || ((_l = (_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.video) == null ? void 0 : _l.play_url) || ((_n = (_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.video) == null ? void 0 : _n.download_url) || ((_p = (_o = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _o.video) == null ? void 0 : _p.url);
-  if (!videoUrl) {
-    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL");
-    error.historyId = historyId;
-    throw error;
-  }
-  logger_default.info(`Seedance: \u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
-  return videoUrl;
+  logger_default.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
+  await updateJobInDb(jobId, {
+    jimeng_history_id: historyId,
+    refresh_token: refreshToken,
+    model: _model
+  });
+  return null;
 }
 function buildMetaListFromPrompt(prompt, materials) {
   const metaList = [];
@@ -5965,6 +5942,12 @@ var videos_default = {
       (async () => {
         try {
           updateJob(job.id, { status: "processing" });
+          await updateJobInDb(job.id, {
+            status: "processing",
+            model,
+            prompt: prompt || "",
+            response_format
+          });
           let videoUrl;
           if (isSeedanceModel(model)) {
             const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
@@ -5979,7 +5962,8 @@ var videos_default = {
                 filePaths: finalFilePaths,
                 files: request2.files
               },
-              token
+              token,
+              job.id
             );
           } else {
             videoUrl = await generateVideo(
@@ -5992,8 +5976,13 @@ var videos_default = {
                 filePaths: finalFilePaths,
                 files: request2.files
               },
-              token
+              token,
+              job.id
             );
+          }
+          if (videoUrl === null) {
+            logger_default.info(`Job ${job.id}: handed off to background poller`);
+            return;
           }
           if (response_format === "b64_json") {
             const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
@@ -6036,7 +6025,7 @@ var video_jobs_default = {
     "/jobs/:jobId": async (request2) => {
       var _a, _b, _c;
       const jobId = request2.params["jobId"];
-      const job = getJob(jobId);
+      const job = await getJob(jobId);
       if (!job) {
         return new Response({ error: { message: `Job ${jobId} not found`, code: "job_not_found" } }, { statusCode: 404 });
       }
@@ -6095,6 +6084,79 @@ var routes_default = [
   video_jobs_default
 ];
 
+// src/lib/job-poller.ts
+var POLL_INTERVAL_MS = 3e4;
+async function pollOnce() {
+  const jobs2 = await getProcessingJobsWithHistoryId();
+  if (jobs2.length === 0) return;
+  logger_default.info(`JobPoller: checking ${jobs2.length} active job(s)`);
+  await Promise.all(jobs2.map(async (dbJob) => {
+    try {
+      const result = await checkVideoJobStatus(dbJob.jimeng_history_id, dbJob.refresh_token);
+      if (result.status === "completed" && result.url) {
+        const prompt = dbJob.prompt || void 0;
+        const responseFormat = dbJob.response_format || "url";
+        if (responseFormat === "b64_json") {
+          try {
+            const b64 = await util_default.fetchFileBASE64(result.url);
+            await updateJobInDb(dbJob.id, {
+              status: "completed",
+              result_b64_json: b64,
+              result_revised_prompt: prompt
+            });
+            updateJob(dbJob.id, {
+              status: "completed",
+              result: { b64_json: b64, revised_prompt: prompt }
+            });
+          } catch (b64Err) {
+            logger_default.warn(`JobPoller: b64 conversion failed for job ${dbJob.id}, falling back to url: ${b64Err.message}`);
+            await updateJobInDb(dbJob.id, {
+              status: "completed",
+              result_url: result.url,
+              result_revised_prompt: prompt
+            });
+            updateJob(dbJob.id, {
+              status: "completed",
+              result: { url: result.url, revised_prompt: prompt }
+            });
+          }
+        } else {
+          await updateJobInDb(dbJob.id, {
+            status: "completed",
+            result_url: result.url,
+            result_revised_prompt: prompt
+          });
+          updateJob(dbJob.id, {
+            status: "completed",
+            result: { url: result.url, revised_prompt: prompt }
+          });
+        }
+        logger_default.info(`JobPoller: job ${dbJob.id} completed, url: ${result.url}`);
+      } else if (result.status === "failed") {
+        const errorMsg = result.error || "\u89C6\u9891\u751F\u6210\u5931\u8D25";
+        await updateJobInDb(dbJob.id, { status: "failed", error_message: errorMsg });
+        updateJob(dbJob.id, { status: "failed", error: errorMsg });
+        logger_default.error(`JobPoller: job ${dbJob.id} failed - ${errorMsg}`);
+      } else {
+        await updateJobInDb(dbJob.id, { last_poll_at: Math.floor(Date.now() / 1e3) });
+        logger_default.info(`JobPoller: job ${dbJob.id} still processing (historyId: ${dbJob.jimeng_history_id})`);
+      }
+    } catch (err) {
+      logger_default.error(`JobPoller: error checking job ${dbJob.id}: ${err.message}`);
+    }
+  }));
+}
+function startJobPoller() {
+  logger_default.info(`JobPoller: started (interval=${POLL_INTERVAL_MS / 1e3}s)`);
+  setInterval(async () => {
+    try {
+      await pollOnce();
+    } catch (err) {
+      logger_default.error(`JobPoller: unhandled error in poll cycle: ${err.message}`);
+    }
+  }, POLL_INTERVAL_MS);
+}
+
 // src/index.ts
 var startupTime = performance.now();
 (async () => {
@@ -6106,6 +6168,7 @@ var startupTime = performance.now();
   logger_default.info("Service name:", config_default.service.name);
   server_default.attachRoutes(routes_default);
   await server_default.listen();
+  startJobPoller();
   config_default.service.bindAddress && logger_default.success("Service bind address:", config_default.service.bindAddress);
 })().then(
   () => logger_default.success(

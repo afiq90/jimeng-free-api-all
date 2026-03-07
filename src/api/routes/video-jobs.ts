@@ -10,7 +10,7 @@ export default {
 
         '/jobs/:jobId': async (request: Request) => {
             const jobId = request.params['jobId'];
-            const job = getJob(jobId);
+            const job = await getJob(jobId);
 
             if (!job) {
                 return new Response({ error: { message: `Job ${jobId} not found`, code: 'job_not_found' } }, { statusCode: 404 });

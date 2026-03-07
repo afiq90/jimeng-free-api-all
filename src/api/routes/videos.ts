@@ -5,6 +5,7 @@ import Response from '@/lib/response/Response.ts';
 import { tokenSplit } from '@/api/controllers/core.ts';
 import { generateVideo, generateSeedanceVideo, isSeedanceModel, DEFAULT_MODEL } from '@/api/controllers/videos.ts';
 import { createJob, updateJob } from '@/lib/job-store.ts';
+import { updateJobInDb } from '@/lib/db.ts';
 import util from '@/lib/util.ts';
 import logger from '@/lib/logger.ts';
 
@@ -70,8 +71,14 @@ export default {
             (async () => {
                 try {
                     updateJob(job.id, { status: 'processing' });
+                    await updateJobInDb(job.id, {
+                        status: 'processing',
+                        model,
+                        prompt: prompt || '',
+                        response_format,
+                    });
 
-                    let videoUrl: string;
+                    let videoUrl: string | null;
                     if (isSeedanceModel(model)) {
                         const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
                         const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
@@ -85,7 +92,8 @@ export default {
                                 filePaths: finalFilePaths,
                                 files: request.files,
                             },
-                            token
+                            token,
+                            job.id
                         );
                     } else {
                         videoUrl = await generateVideo(
@@ -98,10 +106,18 @@ export default {
                                 filePaths: finalFilePaths,
                                 files: request.files,
                             },
-                            token
+                            token,
+                            job.id
                         );
                     }
 
+                    // null means historyId was saved and polling handed off to background worker
+                    if (videoUrl === null) {
+                        logger.info(`Job ${job.id}: handed off to background poller`);
+                        return;
+                    }
+
+                    // Non-null means the job completed synchronously (future fast-path)
                     if (response_format === "b64_json") {
                         const videoBase64 = await util.fetchFileBASE64(videoUrl);
                         updateJob(job.id, {

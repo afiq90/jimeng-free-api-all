@@ -161,7 +161,8 @@ This service acts as a proxy API layer over the Jimeng (即梦) website, since J
 | 2. Receive daily credits (if zero) | Standard HTTP | `POST /commerce/v1/benefits/credit_receive` |
 | 3. Material upload (image/video/audio) | Standard HTTP | Multi-step: get token → apply → upload → commit to ByteDance storage |
 | 4. Generation trigger | **Playwright browser** (`page.evaluate`) | Required: Jimeng's `bdms` anti-bot SDK must sign this request from inside the browser |
-| 5. Poll for result | Standard HTTP (Axios) | `POST /mweb/v1/get_history_by_ids`, up to 60 retries with backoff — can take minutes to hours |
+| 5. Save historyId to DB | PostgreSQL | `jimeng_history_id` + `refresh_token` persisted immediately so polling can resume after any restart |
+| 5b. Poll for result (background) | Background poller (`job-poller.ts`) | Runs every 30s, no timeout — polls until Jimeng confirms done or failed |
 | 6. Fetch high-quality URL | Standard HTTP | `POST /mweb/v1/get_local_item_list` |
 
 The browser (Playwright/Chromium) is only needed briefly for step 4. Steps 5–6 run entirely without it.
@@ -175,14 +176,36 @@ Previously the entire flow ran inside a single synchronous HTTP request. Since s
 The async job pattern fixes this by returning a job ID immediately and running all work in the background.
 
 ### Job Store (`src/lib/job-store.ts`)
-- In-memory `Map<jobId, Job>`
-- Job TTL: 24 hours
-- Cleanup: runs hourly, removes expired jobs
-- **Note:** Jobs are lost if the server restarts. If persistence across restarts is needed in the future, consider adding a database-backed store.
+- In-memory `Map<jobId, Job>` for fast reads
+- All creates and updates are synced to PostgreSQL (`video_jobs` table)
+- On `getJob` miss, falls back to DB — jobs survive server restarts
+- Job TTL: 24 hours; cleanup runs hourly
+
+### Database (`src/lib/db.ts`)
+- PostgreSQL connection pool via `pg` package (`DATABASE_URL` env var)
+- `video_jobs` table stores: `id`, `status`, `jimeng_history_id`, `refresh_token`, `model`, `prompt`, `response_format`, `result_url`, `result_b64_json`, `error_message`, `last_poll_at`
+- `jimeng_history_id` is saved immediately after generation is triggered, before any polling
+
+### Background Job Poller (`src/lib/job-poller.ts`)
+- Runs every 30 seconds at startup (started in `src/index.ts`)
+- Queries DB for all jobs with `status = 'processing'` AND `jimeng_history_id IS NOT NULL`
+- For each job, makes a single status check against Jimeng's `get_history_by_ids` API
+- Updates job status in both DB and in-memory store when complete or failed
+- No hard timeout — jobs are polled indefinitely until Jimeng reports done or failed
 
 ---
 
 ## Recent Changes
+
+- **2026-03-07**: Added PostgreSQL persistence and background job poller to eliminate video generation timeouts:
+  - Created `src/lib/db.ts` — PostgreSQL connection pool, `video_jobs` table CRUD (using `pg` package)
+  - Created `src/lib/job-poller.ts` — background worker polling every 30s, no hard timeout, handles all active jobs
+  - Modified `src/lib/job-store.ts` — all creates/updates now sync to DB; `getJob` falls back to DB on memory miss
+  - Modified `src/api/controllers/videos.ts` — `generateVideo` and `generateSeedanceVideo` now save `jimeng_history_id` + `refresh_token` to DB immediately after triggering, then return `null` to hand off polling to the background worker; added `export checkVideoJobStatus` used by the poller
+  - Modified `src/api/routes/videos.ts` — passes `job.id` to generate functions, saves `model`/`prompt`/`response_format` to DB, handles `null` return (hand-off to poller)
+  - Modified `src/api/routes/video-jobs.ts` — `getJob` is now `async` (falls back to DB)
+  - Modified `src/index.ts` — calls `startJobPoller()` on startup
+  - Root cause fixed: jobs that take hours on Jimeng no longer time out; `jimeng_history_id` is never lost
 
 - **2026-03-03**: Refactored video generation to async job pattern to fix production memory exhaustion:
   - `POST /v1/videos/generations` returns immediately with job ID (HTTP 202)
