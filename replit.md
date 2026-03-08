@@ -197,6 +197,13 @@ The async job pattern fixes this by returning a job ID immediately and running a
 
 ## Recent Changes
 
+- **2026-03-08**: Fixed deployment timeout caused by large Playwright browser download in build step:
+  - Moved `npx playwright install chromium` from build command to run command (startup)
+  - Build is now just `npm run build` — no 280MB browser download during image creation
+  - Repl layer is now small, so deployment succeeds even when Nix layers are uncached
+  - On VM startup, Playwright installs itself before the Node process starts; health checks still pass because the server listens on port 5000 before browser warmup
+  - Root cause: Playwright browsers (~280MB) were baked into the Repl layer at build time, causing total deployment time (build + Repl layer push + uncached nix-0 layer push) to exceed the ~9 minute wall-clock limit
+
 - **2026-03-07**: Added PostgreSQL persistence and background job poller to eliminate video generation timeouts:
   - Created `src/lib/db.ts` — PostgreSQL connection pool, `video_jobs` table CRUD (using `pg` package)
   - Created `src/lib/job-poller.ts` — background worker polling every 30s, no hard timeout, handles all active jobs
