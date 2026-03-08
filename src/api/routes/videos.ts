@@ -5,7 +5,7 @@ import Response from '@/lib/response/Response.ts';
 import { tokenSplit } from '@/api/controllers/core.ts';
 import { generateVideo, generateSeedanceVideo, isSeedanceModel, DEFAULT_MODEL } from '@/api/controllers/videos.ts';
 import { createJob, updateJob } from '@/lib/job-store.ts';
-import { updateJobInDb } from '@/lib/db.ts';
+import { saveJobToDb, updateJobInDb } from '@/lib/db.ts';
 import util from '@/lib/util.ts';
 import logger from '@/lib/logger.ts';
 
@@ -71,6 +71,7 @@ export default {
             (async () => {
                 try {
                     updateJob(job.id, { status: 'processing' });
+                    await saveJobToDb(job.id, 'pending', job.created);
                     await updateJobInDb(job.id, {
                         status: 'processing',
                         model,

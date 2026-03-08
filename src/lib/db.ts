@@ -75,7 +75,10 @@ export async function updateJobInDb(
     }
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function getJobFromDb(id: string): Promise<DbJob | null> {
+    if (!UUID_REGEX.test(id)) return null;
     try {
         const result = await pool.query(
             `SELECT * FROM video_jobs WHERE id = $1`,
@@ -92,7 +95,8 @@ export async function getProcessingJobsWithHistoryId(): Promise<DbJob[]> {
     try {
         const result = await pool.query(
             `SELECT * FROM video_jobs
-             WHERE status = 'processing' AND jimeng_history_id IS NOT NULL
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NOT NULL
              ORDER BY created_at ASC`
         );
         return result.rows;

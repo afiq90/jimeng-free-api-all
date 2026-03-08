@@ -1384,6 +1384,7 @@ export async function generateVideo(
 
   logger.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
+    status: 'processing',
     jimeng_history_id: historyId,
     refresh_token: refreshToken,
     model: _model,
@@ -1750,6 +1751,7 @@ export async function generateSeedanceVideo(
 
   logger.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
+    status: 'processing',
     jimeng_history_id: historyId,
     refresh_token: refreshToken,
     model: _model,

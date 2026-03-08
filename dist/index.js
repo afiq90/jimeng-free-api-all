@@ -3729,7 +3729,9 @@ async function updateJobInDb(id, update) {
     logger_default.error(`DB: updateJobInDb failed for ${id}: ${err.message}`);
   }
 }
+var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function getJobFromDb(id) {
+  if (!UUID_REGEX.test(id)) return null;
   try {
     const result = await pool.query(
       `SELECT * FROM video_jobs WHERE id = $1`,
@@ -3745,7 +3747,8 @@ async function getProcessingJobsWithHistoryId() {
   try {
     const result = await pool.query(
       `SELECT * FROM video_jobs
-             WHERE status = 'processing' AND jimeng_history_id IS NOT NULL
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NOT NULL
              ORDER BY created_at ASC`
     );
     return result.rows;
@@ -4898,6 +4901,7 @@ async function generateVideo(_model, prompt, {
     throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
   logger_default.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
+    status: "processing",
     jimeng_history_id: historyId,
     refresh_token: refreshToken,
     model: _model
@@ -5203,6 +5207,7 @@ async function generateSeedanceVideo(_model, prompt, {
     throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
   logger_default.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
+    status: "processing",
     jimeng_history_id: historyId,
     refresh_token: refreshToken,
     model: _model
@@ -5942,6 +5947,7 @@ var videos_default = {
       (async () => {
         try {
           updateJob(job.id, { status: "processing" });
+          await saveJobToDb(job.id, "pending", job.created);
           await updateJobInDb(job.id, {
             status: "processing",
             model,
