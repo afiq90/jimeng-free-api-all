@@ -98,7 +98,7 @@ export async function getJob(id: string): Promise<Job | undefined> {
 }
 
 // --- Browser Semaphore ---
-const BROWSER_CONCURRENCY = 2;
+const BROWSER_CONCURRENCY = 1;
 let activeBrowserSlots = 0;
 const waitQueue: Array<{ id: string; resolve: () => void }> = [];
 

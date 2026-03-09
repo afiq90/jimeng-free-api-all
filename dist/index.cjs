@@ -3720,8 +3720,10 @@ var import_pg = require("pg");
 var pool = new import_pg.Pool({
   connectionString: process.env.DATABASE_URL,
   max: 5,
-  idleTimeoutMillis: 3e4,
-  connectionTimeoutMillis: 5e3
+  idleTimeoutMillis: 1e4,
+  connectionTimeoutMillis: 5e3,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 1e4
 });
 pool.on("error", (err) => {
   logger_default.error(`DB: pool error: ${err.message}`);
@@ -3855,7 +3857,7 @@ async function getJob(id) {
   jobs.set(id, job);
   return job;
 }
-var BROWSER_CONCURRENCY = 2;
+var BROWSER_CONCURRENCY = 1;
 var activeBrowserSlots = 0;
 var waitQueue = [];
 function updateQueuePositions() {
