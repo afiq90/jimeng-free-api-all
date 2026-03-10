@@ -180,22 +180,44 @@ The async job pattern fixes this by returning a job ID immediately and running a
 - All creates and updates are synced to PostgreSQL (`video_jobs` table)
 - On `getJob` miss, falls back to DB — jobs survive server restarts
 - Job TTL: 24 hours; cleanup runs hourly
+- Browser semaphore (`BROWSER_CONCURRENCY = 1`): only one Chromium instance runs at a time to protect the 2 GiB production VM from memory exhaustion; additional requests queue until a slot is free
 
 ### Database (`src/lib/db.ts`)
 - PostgreSQL connection pool via `pg` package (`DATABASE_URL` env var)
+- Pool config: `max: 5`, `idleTimeoutMillis: 10000`, `keepAlive: true`, `keepAliveInitialDelayMillis: 10000`
+  - `keepAlive` prevents server-side silent connection drops between poll cycles
+  - Short `idleTimeoutMillis` (10s) ensures our client closes idle connections before the server drops them unexpectedly
 - `video_jobs` table stores: `id`, `status`, `jimeng_history_id`, `refresh_token`, `model`, `prompt`, `response_format`, `result_url`, `result_b64_json`, `error_message`, `last_poll_at`
 - `jimeng_history_id` is saved immediately after generation is triggered, before any polling
+- `getJobFromDb` validates UUID format before querying — non-UUID IDs (e.g. legacy `seedance-limited-tmp-*`) return `null` immediately instead of crashing with a PostgreSQL syntax error
 
 ### Background Job Poller (`src/lib/job-poller.ts`)
 - Runs every 30 seconds at startup (started in `src/index.ts`)
-- Queries DB for all jobs with `status = 'processing'` AND `jimeng_history_id IS NOT NULL`
-- For each job, makes a single status check against Jimeng's `get_history_by_ids` API
-- Updates job status in both DB and in-memory store when complete or failed
-- No hard timeout — jobs are polled indefinitely until Jimeng reports done or failed
+- Each poll cycle runs two passes:
+  1. **Stuck job reaper** (`reapStuckJobs`): finds jobs that are `processing` or `pending` with `jimeng_history_id IS NULL` and older than 10 minutes — these are jobs where the Jimeng submission never reached the website (e.g. browser timeout, memory crash). They are marked `failed` immediately so clients stop waiting.
+  2. **Active job checker**: queries DB for jobs with `(status = 'processing' OR status = 'pending') AND jimeng_history_id IS NOT NULL`, makes a status check against Jimeng's `get_history_by_ids` API, and updates status in both DB and in-memory store
+- No hard timeout on active jobs — polled indefinitely until Jimeng reports done or failed
+
+### Known Race Condition (fixed)
+A race condition existed between `saveJobToDb` (INSERT, fire-and-forget) and the route's subsequent `updateJobInDb` (UPDATE for `status = 'processing'`). If the UPDATE ran before the INSERT committed, it matched 0 rows silently, leaving the job permanently `pending` in the DB while appearing `processing` in memory. The poller only queries `processing` or `pending + historyId` jobs, so these would never be polled.
+
+**Fix applied:**
+1. Route's async IIFE explicitly `await`s `saveJobToDb` before the status UPDATE, ensuring the row exists
+2. `generateVideo` and `generateSeedanceVideo` include `status: 'processing'` when saving `jimeng_history_id` — a defensive fallback that corrects the status even if the earlier update missed
+3. Poller's active job query includes `status = 'pending'` (in addition to `processing`) so jobs with a historyId are polled regardless of which status update succeeded
 
 ---
 
 ## Recent Changes
+
+- **2026-03-10/11**: Hardened job reliability and production stability:
+  - **Stuck job reaper**: Poller now auto-fails jobs that are `processing`/`pending` with no `jimeng_history_id` after 10 minutes — catches cases where the browser timed out or crashed before ever reaching Jimeng, so clients are no longer stuck waiting forever
+  - **Race condition fix**: `saveJobToDb` is now explicitly awaited in the route's async IIFE before the status UPDATE runs, eliminating a race where the UPDATE matched 0 rows (INSERT not yet committed), leaving the job permanently `pending` in DB but `processing` in memory
+  - **Defensive status writes**: Both `generateVideo` and `generateSeedanceVideo` now include `status: 'processing'` when saving `jimeng_history_id` — a second line of defense that corrects DB status even if the earlier update missed
+  - **Poller covers `pending` jobs**: Active job query now includes `status = 'pending'` alongside `status = 'processing'` so jobs with a historyId are picked up regardless of which status write succeeded
+  - **UUID guard**: `getJobFromDb` now validates UUID format before querying — non-UUID IDs return `null` immediately instead of crashing PostgreSQL with an invalid syntax error
+  - **Browser concurrency reduced to 1** (`BROWSER_CONCURRENCY` in `job-store.ts`): production VM is 2 GiB; running two simultaneous Chromium instances pushes memory to 96–97%, crashing the server. One at a time keeps peak usage safe.
+  - **DB pool hardened**: `keepAlive: true` + `keepAliveInitialDelayMillis: 10000` prevent the server from silently dropping connections between 30-second poll cycles; `idleTimeoutMillis` reduced from 30s to 10s so our client closes idle connections before the server drops them first
 
 - **2026-03-08**: Fixed deployment timeout caused by large Playwright browser download in build step:
   - Moved `npx playwright install chromium` from build command to run command (startup)
