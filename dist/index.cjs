@@ -3769,6 +3769,23 @@ async function getJobFromDb(id) {
     return null;
   }
 }
+async function getStuckJobsWithoutHistoryId(olderThanSeconds = 600) {
+  const cutoff = Math.floor(Date.now() / 1e3) - olderThanSeconds;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NULL
+               AND created_at < $1
+             ORDER BY created_at ASC`,
+      [cutoff]
+    );
+    return result.rows;
+  } catch (err) {
+    logger_default.error(`DB: getStuckJobsWithoutHistoryId failed: ${err.message}`);
+    return [];
+  }
+}
 async function getProcessingJobsWithHistoryId() {
   try {
     const result = await pool.query(
@@ -6118,7 +6135,20 @@ var routes_default = [
 
 // src/lib/job-poller.ts
 var POLL_INTERVAL_MS = 3e4;
+var STUCK_JOB_TIMEOUT_SECONDS = 600;
+async function reapStuckJobs() {
+  const stuckJobs = await getStuckJobsWithoutHistoryId(STUCK_JOB_TIMEOUT_SECONDS);
+  if (stuckJobs.length === 0) return;
+  logger_default.warn(`JobPoller: found ${stuckJobs.length} stuck job(s) with no historyId, marking as failed`);
+  await Promise.all(stuckJobs.map(async (dbJob) => {
+    const errorMsg = "\u89C6\u9891\u751F\u6210\u8BF7\u6C42\u672A\u80FD\u63D0\u4EA4\u5230Jimeng\uFF08\u8D85\u65F6\u6216\u670D\u52A1\u4E0D\u53EF\u7528\uFF09";
+    await updateJobInDb(dbJob.id, { status: "failed", error_message: errorMsg });
+    updateJob(dbJob.id, { status: "failed", error: errorMsg });
+    logger_default.warn(`JobPoller: reaped stuck job ${dbJob.id} (created ${Math.floor(Date.now() / 1e3) - dbJob.created_at}s ago)`);
+  }));
+}
 async function pollOnce() {
+  await reapStuckJobs();
   const jobs2 = await getProcessingJobsWithHistoryId();
   if (jobs2.length === 0) return;
   logger_default.info(`JobPoller: checking ${jobs2.length} active job(s)`);

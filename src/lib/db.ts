@@ -93,6 +93,24 @@ export async function getJobFromDb(id: string): Promise<DbJob | null> {
     }
 }
 
+export async function getStuckJobsWithoutHistoryId(olderThanSeconds = 600): Promise<DbJob[]> {
+    const cutoff = Math.floor(Date.now() / 1000) - olderThanSeconds;
+    try {
+        const result = await pool.query(
+            `SELECT * FROM video_jobs
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NULL
+               AND created_at < $1
+             ORDER BY created_at ASC`,
+            [cutoff]
+        );
+        return result.rows;
+    } catch (err: any) {
+        logger.error(`DB: getStuckJobsWithoutHistoryId failed: ${err.message}`);
+        return [];
+    }
+}
+
 export async function getProcessingJobsWithHistoryId(): Promise<DbJob[]> {
     try {
         const result = await pool.query(

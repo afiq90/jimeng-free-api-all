@@ -1,12 +1,29 @@
 import logger from './logger.ts';
-import { getProcessingJobsWithHistoryId, updateJobInDb } from './db.ts';
+import { getProcessingJobsWithHistoryId, getStuckJobsWithoutHistoryId, updateJobInDb } from './db.ts';
 import { updateJob } from './job-store.ts';
 import { checkVideoJobStatus } from '../api/controllers/videos.ts';
 import util from './util.ts';
 
 const POLL_INTERVAL_MS = 30_000;
 
+const STUCK_JOB_TIMEOUT_SECONDS = 600;
+
+async function reapStuckJobs(): Promise<void> {
+    const stuckJobs = await getStuckJobsWithoutHistoryId(STUCK_JOB_TIMEOUT_SECONDS);
+    if (stuckJobs.length === 0) return;
+
+    logger.warn(`JobPoller: found ${stuckJobs.length} stuck job(s) with no historyId, marking as failed`);
+    await Promise.all(stuckJobs.map(async (dbJob) => {
+        const errorMsg = '视频生成请求未能提交到Jimeng（超时或服务不可用）';
+        await updateJobInDb(dbJob.id, { status: 'failed', error_message: errorMsg });
+        updateJob(dbJob.id, { status: 'failed', error: errorMsg });
+        logger.warn(`JobPoller: reaped stuck job ${dbJob.id} (created ${Math.floor(Date.now() / 1000) - dbJob.created_at}s ago)`);
+    }));
+}
+
 async function pollOnce(): Promise<void> {
+    await reapStuckJobs();
+
     const jobs = await getProcessingJobsWithHistoryId();
     if (jobs.length === 0) return;
 
