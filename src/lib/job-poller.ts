@@ -14,7 +14,7 @@ async function reapStuckJobs(): Promise<void> {
 
     logger.warn(`JobPoller: found ${stuckJobs.length} stuck job(s) with no historyId, marking as failed`);
     await Promise.all(stuckJobs.map(async (dbJob) => {
-        const errorMsg = '视频生成请求未能提交到Jimeng（超时或服务不可用）';
+        const errorMsg = 'Video generation request failed to reach Jimeng (timed out or service unavailable)';
         await updateJobInDb(dbJob.id, { status: 'failed', error_message: errorMsg });
         updateJob(dbJob.id, { status: 'failed', error: errorMsg });
         logger.warn(`JobPoller: reaped stuck job ${dbJob.id} (created ${Math.floor(Date.now() / 1000) - dbJob.created_at}s ago)`);
@@ -75,7 +75,7 @@ async function pollOnce(): Promise<void> {
 
                 logger.info(`JobPoller: job ${dbJob.id} completed, url: ${result.url}`);
             } else if (result.status === 'failed') {
-                const errorMsg = result.error || '视频生成失败';
+                const errorMsg = result.error || 'Video generation failed';
                 await updateJobInDb(dbJob.id, { status: 'failed', error_message: errorMsg });
                 updateJob(dbJob.id, { status: 'failed', error: errorMsg });
                 logger.error(`JobPoller: job ${dbJob.id} failed - ${errorMsg}`);

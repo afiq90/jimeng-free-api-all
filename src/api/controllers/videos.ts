@@ -36,7 +36,7 @@ const MODEL_MAP = {
   "jimeng-video-3.0": "dreamina_ic_generate_video_model_vgfm_3.0",
   "jimeng-video-2.0": "dreamina_ic_generate_video_model_vgfm_lite",
   "jimeng-video-2.0-pro": "dreamina_ic_generate_video_model_vgfm1.0",
-  // Seedance 多图智能视频生成模型（jimeng-video-seedance-2.0 为上游标准名称）
+  // Seedance 多图智能video生成模型（jimeng-video-seedance-2.0 为上游标准名称）
   "jimeng-video-seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0-pro": "dreamina_seedance_40_pro",
@@ -70,7 +70,7 @@ interface UploadedMaterial {
   type: SeedanceMaterialType;
   // 图片
   uri?: string;
-  // 视频/音频（VOD）
+  // video/audio（VOD）
   vid?: string;
   // 通用
   width?: number;
@@ -138,7 +138,7 @@ function detectMaterialTypeFromUrl(url: string): SeedanceMaterialType {
   return "image";
 }
 
-// 视频支持的分辨率和比例配置
+// video支持的分辨率和比例配置
 const VIDEO_RESOLUTION_OPTIONS: {
   [resolution: string]: {
     [ratio: string]: { width: number; height: number };
@@ -167,7 +167,7 @@ const VIDEO_RESOLUTION_OPTIONS: {
   },
 };
 
-// 解析视频分辨率参数
+// 解析video分辨率参数
 function resolveVideoResolution(
   resolution: string = "720p",
   ratio: string = "1:1"
@@ -175,13 +175,13 @@ function resolveVideoResolution(
   const resolutionGroup = VIDEO_RESOLUTION_OPTIONS[resolution];
   if (!resolutionGroup) {
     const supportedResolutions = Object.keys(VIDEO_RESOLUTION_OPTIONS).join(", ");
-    throw new Error(`不支持的视频分辨率 "${resolution}"。支持的分辨率: ${supportedResolutions}`);
+    throw new Error(`Unsupported video resolution "${resolution}". Supported resolutions: ${supportedResolutions}`);
   }
 
   const ratioConfig = resolutionGroup[ratio];
   if (!ratioConfig) {
     const supportedRatios = Object.keys(resolutionGroup).join(", ");
-    throw new Error(`在 "${resolution}" 分辨率下，不支持的比例 "${ratio}"。支持的比例: ${supportedRatios}`);
+    throw new Error(`Unsupported ratio "${ratio}" for resolution "${resolution}". Supported ratios: ${supportedRatios}`);
   }
 
   return {
@@ -306,12 +306,12 @@ function calculateCRC32(buffer: ArrayBuffer): string {
   return ((crc ^ (-1)) >>> 0).toString(16).padStart(8, '0');
 }
 
-// 视频专用图片上传功能（基于 images.ts 的 uploadImageFromUrl）
+// video专用图片上传功能（基于 images.ts 的 uploadImageFromUrl）
 async function uploadImageForVideo(imageUrl: string, refreshToken: string): Promise<string> {
   try {
-    logger.info(`开始上传视频图片: ${imageUrl}`);
+    logger.info(`Uploading image: ${imageUrl}`);
     
-    // 第一步：获取上传令牌
+    // 第一步：Getting 上传令牌
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2, // AIGC 图片上传场景
@@ -320,25 +320,25 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     
     const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("获取上传令牌失败");
+      throw new Error("Failed to get upload token");
     }
     
     const actualServiceId = service_id || "tb4s082cfz";
-    logger.info(`获取上传令牌成功: service_id=${actualServiceId}`);
+    logger.info(`Upload token obtained: service_id=${actualServiceId}`);
     
     // 下载图片数据
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
-      throw new Error(`下载图片失败: ${imageResponse.status}`);
+      throw new Error(`Image download failed: ${imageResponse.status}`);
     }
     
     const imageBuffer = await imageResponse.arrayBuffer();
     const fileSize = imageBuffer.byteLength;
     const crc32 = calculateCRC32(imageBuffer);
     
-    logger.info(`图片下载完成: 大小=${fileSize}字节, CRC32=${crc32}`);
+    logger.info(`Image downloaded: size=${fileSize} bytes, CRC32=${crc32}`);
     
-    // 第二步：申请图片上传权限
+    // 第二步：Requesting 图片上传权限
     const now = new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, '').replace(/\.\d{3}Z$/, 'Z');
     
@@ -352,7 +352,7 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     
     const authorization = createSignature('GET', applyUrl, requestHeaders, access_key_id, secret_access_key, session_token);
     
-    logger.info(`申请上传权限: ${applyUrl}`);
+    logger.info(`Requesting upload auth: ${applyUrl}`);
     
     const applyResponse = await fetch(applyUrl, {
       method: 'GET',
@@ -376,21 +376,21 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`申请上传权限失败: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
     }
     
     const applyResult = await applyResponse.json();
     
     if (applyResult?.ResponseMetadata?.Error) {
-      throw new Error(`申请上传权限失败: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
     
-    logger.info(`申请上传权限成功`);
+    logger.info(`Upload auth granted`);
     
     // 解析上传信息
     const uploadAddress = applyResult?.Result?.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`获取上传地址失败: ${JSON.stringify(applyResult)}`);
+      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
     }
     
     const storeInfo = uploadAddress.StoreInfos[0];
@@ -400,7 +400,7 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     const uploadUrl = `https://${uploadHost}/upload/v1/${storeInfo.StoreUri}`;
     const imageId = storeInfo.StoreUri.split('/').pop();
     
-    logger.info(`准备上传图片: imageId=${imageId}, uploadUrl=${uploadUrl}`);
+    logger.info(`Uploading image: imageId=${imageId}, url=${uploadUrl}`);
     
     // 第三步：上传图片文件
     const uploadResponse = await fetch(uploadUrl, {
@@ -426,12 +426,12 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`图片上传失败: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
     }
     
-    logger.info(`图片文件上传成功`);
+    logger.info(`Image file uploaded successfully`);
     
-    // 第四步：提交上传
+    // 第四步：Committing 上传
     const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
     
     const commitTimestamp = new Date().toISOString().replace(/[:\-]/g, '').replace(/\.\d{3}Z$/, 'Z');
@@ -475,22 +475,22 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`提交上传失败: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
     }
     
     const commitResult = await commitResponse.json();
     
     if (commitResult?.ResponseMetadata?.Error) {
-      throw new Error(`提交上传失败: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
     
     if (!commitResult?.Result?.Results || commitResult.Result.Results.length === 0) {
-      throw new Error(`提交上传响应缺少结果: ${JSON.stringify(commitResult)}`);
+      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
     }
     
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2000) {
-      throw new Error(`图片上传状态异常: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
     }
     
     const fullImageUri = uploadResult.Uri;
@@ -498,25 +498,25 @@ async function uploadImageForVideo(imageUrl: string, refreshToken: string): Prom
     // 验证图片信息
     const pluginResult = commitResult.Result?.PluginResult?.[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger.info(`视频图片上传完成: ${pluginResult.ImageUri}`);
+      logger.info(`Image upload complete: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
 
-    logger.info(`视频图片上传完成: ${fullImageUri}`);
+    logger.info(`Image upload complete: ${fullImageUri}`);
     return fullImageUri;
 
   } catch (error) {
-    logger.error(`视频图片上传失败: ${error.message}`);
+    logger.error(`Image upload failed: ${error.message}`);
     throw error;
   }
 }
 
-// 从Buffer上传视频图片
+// 从Buffer上传video图片
 async function uploadImageBufferForVideo(buffer: Buffer, refreshToken: string): Promise<string> {
   try {
-    logger.info(`开始从Buffer上传视频图片，大小: ${buffer.length}字节`);
+    logger.info(`Uploading image from buffer, size: ${buffer.length} bytes`);
 
-    // 第一步：获取上传令牌
+    // 第一步：Getting 上传令牌
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2,
@@ -525,18 +525,18 @@ async function uploadImageBufferForVideo(buffer: Buffer, refreshToken: string): 
 
     const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("获取上传令牌失败");
+      throw new Error("Failed to get upload token");
     }
 
     const actualServiceId = service_id || "tb4s082cfz";
-    logger.info(`获取上传令牌成功: service_id=${actualServiceId}`);
+    logger.info(`Upload token obtained: service_id=${actualServiceId}`);
 
     const fileSize = buffer.length;
     const crc32 = calculateCRC32(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
 
-    logger.info(`Buffer大小: ${fileSize}字节, CRC32=${crc32}`);
+    logger.info(`Buffer size: ${fileSize} bytes, CRC32=${crc32}`);
 
-    // 第二步：申请图片上传权限
+    // 第二步：Requesting 图片上传权限
     const now = new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, '').replace(/\.\d{3}Z$/, 'Z');
 
@@ -566,18 +566,18 @@ async function uploadImageBufferForVideo(buffer: Buffer, refreshToken: string): 
 
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`申请上传权限失败: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
     }
 
     const applyResult = await applyResponse.json();
 
     if (applyResult?.ResponseMetadata?.Error) {
-      throw new Error(`申请上传权限失败: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
 
     const uploadAddress = applyResult?.Result?.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`获取上传地址失败: ${JSON.stringify(applyResult)}`);
+      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
     }
 
     const storeInfo = uploadAddress.StoreInfos[0];
@@ -604,12 +604,12 @@ async function uploadImageBufferForVideo(buffer: Buffer, refreshToken: string): 
 
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`图片上传失败: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
     }
 
-    logger.info(`Buffer图片文件上传成功`);
+    logger.info(`BufferImage file uploaded successfully`);
 
-    // 第四步：提交上传
+    // 第四步：Committing 上传
     const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
 
     const commitTimestamp = new Date().toISOString().replace(/[:\-]/g, '').replace(/\.\d{3}Z$/, 'Z');
@@ -646,43 +646,43 @@ async function uploadImageBufferForVideo(buffer: Buffer, refreshToken: string): 
 
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`提交上传失败: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
     }
 
     const commitResult = await commitResponse.json();
 
     if (commitResult?.ResponseMetadata?.Error) {
-      throw new Error(`提交上传失败: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
 
     if (!commitResult?.Result?.Results || commitResult.Result.Results.length === 0) {
-      throw new Error(`提交上传响应缺少结果: ${JSON.stringify(commitResult)}`);
+      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
     }
 
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2000) {
-      throw new Error(`图片上传状态异常: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
     }
 
     const fullImageUri = uploadResult.Uri;
 
     const pluginResult = commitResult.Result?.PluginResult?.[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger.info(`Buffer视频图片上传完成: ${pluginResult.ImageUri}`);
+      logger.info(`BufferImage upload complete: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
 
-    logger.info(`Buffer视频图片上传完成: ${fullImageUri}`);
+    logger.info(`BufferImage upload complete: ${fullImageUri}`);
     return fullImageUri;
 
   } catch (error) {
-    logger.error(`Buffer视频图片上传失败: ${error.message}`);
+    logger.error(`BufferImage upload failed: ${error.message}`);
     throw error;
   }
 }
 
 /**
- * 解析音频文件时长（毫秒）
+ * 解析audio文件时长（毫s）
  * 支持 WAV 格式精确解析，其他格式按 128kbps 估算
  */
 function parseAudioDuration(buffer: Buffer): number {
@@ -693,7 +693,7 @@ function parseAudioDuration(buffer: Buffer): number {
         buffer[8] === 0x57 && buffer[9] === 0x41 && buffer[10] === 0x56 && buffer[11] === 0x45) {
       const byteRate = buffer.readUInt32LE(28);
       if (byteRate > 0) {
-        // 查找 data chunk 获取精确大小
+        // 查找 data chunk Getting 精确大小
         let offset = 12;
         while (offset < buffer.length - 8) {
           const chunkId = buffer.toString('ascii', offset, offset + 4);
@@ -715,8 +715,8 @@ function parseAudioDuration(buffer: Buffer): number {
 }
 
 /**
- * 上传视频/音频文件
- * 通过 ByteDance VOD (视频点播) API 上传
+ * 上传video/audio文件
+ * 通过 ByteDance VOD (video点播) API 上传
  * 流程: get_upload_token(scene=1) → ApplyUploadInner → Upload → CommitUploadInner
  *
  * @param buffer 文件 Buffer
@@ -731,24 +731,24 @@ async function uploadMediaForVideo(
   refreshToken: string,
   filename?: string
 ): Promise<{ vid: string; width?: number; height?: number; duration?: number; fps?: number }> {
-  const label = mediaType === "audio" ? "音频" : "视频";
+  const label = mediaType === "audio" ? "audio" : "video";
   const fileSize = buffer.length;
-  logger.info(`开始上传${label}文件，大小: ${fileSize} 字节`);
+  logger.info(`Uploading ${label}file, size: ${fileSize} bytes`);
 
-  // 第一步：获取 VOD 上传令牌（scene=1）
+  // 第一步：Getting  VOD 上传令牌（scene=1）
   const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
     data: { scene: 1 },
   });
 
   const { access_key_id, secret_access_key, session_token, space_name } = tokenResult;
   if (!access_key_id || !secret_access_key || !session_token) {
-    throw new Error(`获取${label}上传令牌失败`);
+    throw new Error(`Failed to get ${label} upload token`);
   }
 
   const spaceName = space_name || "dreamina";
-  logger.info(`获取${label}上传令牌成功: spaceName=${spaceName}`);
+  logger.info(`Getting ${label} upload token: spaceName=${spaceName}`);
 
-  // 第二步：申请 VOD 上传权限（ApplyUploadInner）
+  // 第二步：Requesting  VOD 上传权限（ApplyUploadInner）
   const now = new Date();
   const timestamp = now.toISOString().replace(/[:\-]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const randomStr = Math.random().toString(36).substring(2, 12);
@@ -767,7 +767,7 @@ async function uploadMediaForVideo(
     '', 'cn-north-1', 'vod'
   );
 
-  logger.info(`申请${label}上传权限: ${applyUrl}`);
+  logger.info(`Requesting ${label} upload auth: ${applyUrl}`);
 
   const applyResponse = await fetch(applyUrl, {
     method: 'GET',
@@ -785,23 +785,23 @@ async function uploadMediaForVideo(
 
   if (!applyResponse.ok) {
     const errorText = await applyResponse.text();
-    throw new Error(`申请${label}上传权限失败: ${applyResponse.status} - ${errorText}`);
+    throw new Error(`${label} upload auth request failed: ${applyResponse.status} - ${errorText}`);
   }
 
   const applyResult: any = await applyResponse.json();
   if (applyResult?.ResponseMetadata?.Error) {
-    throw new Error(`申请${label}上传权限失败: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+    throw new Error(`${label} upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
   }
 
   const uploadNodes = applyResult?.Result?.InnerUploadAddress?.UploadNodes;
   if (!uploadNodes || uploadNodes.length === 0) {
-    throw new Error(`获取${label}上传节点失败: ${JSON.stringify(applyResult)}`);
+    throw new Error(`Failed to get ${label} upload endpoint: ${JSON.stringify(applyResult)}`);
   }
 
   const uploadNode = uploadNodes[0];
   const storeInfo = uploadNode.StoreInfos?.[0];
   if (!storeInfo) {
-    throw new Error(`获取${label}上传存储信息失败: ${JSON.stringify(uploadNode)}`);
+    throw new Error(`Failed to get ${label} upload storage info: ${JSON.stringify(uploadNode)}`);
   }
 
   const uploadHost = uploadNode.UploadHost;
@@ -810,13 +810,13 @@ async function uploadMediaForVideo(
   const sessionKey = uploadNode.SessionKey;
   const vid = uploadNode.Vid;
 
-  logger.info(`获取${label}上传节点成功: host=${uploadHost}, vid=${vid}`);
+  logger.info(`Getting ${label} upload endpoint: host=${uploadHost}, vid=${vid}`);
 
   // 第三步：上传文件
   const uploadUrl = `https://${uploadHost}/upload/v1/${storeUri}`;
   const crc32 = calculateCRC32(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
 
-  logger.info(`开始上传${label}文件: ${uploadUrl}, CRC32=${crc32}`);
+  logger.info(`Uploading ${label}file: ${uploadUrl}, CRC32=${crc32}`);
 
   const uploadResponse = await fetch(uploadUrl, {
     method: 'POST',
@@ -834,15 +834,15 @@ async function uploadMediaForVideo(
 
   if (!uploadResponse.ok) {
     const errorText = await uploadResponse.text();
-    throw new Error(`${label}文件上传失败: ${uploadResponse.status} - ${errorText}`);
+    throw new Error(`${label} file upload failed: ${uploadResponse.status} - ${errorText}`);
   }
 
   const uploadData: any = await uploadResponse.json();
   if (uploadData?.code !== 2000) {
-    throw new Error(`${label}文件上传失败: code=${uploadData?.code}, message=${uploadData?.message}`);
+    throw new Error(`${label} file upload failed: code=${uploadData?.code}, message=${uploadData?.message}`);
   }
 
-  logger.info(`${label}文件上传成功: crc32=${uploadData.data?.crc32}`);
+  logger.info(`${label}file uploaded, crc32=${uploadData.data?.crc32}`);
 
   // 第四步：确认上传（CommitUploadInner）
   const commitUrl = `${vodHost}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${spaceName}`;
@@ -866,7 +866,7 @@ async function uploadMediaForVideo(
     commitPayload, 'cn-north-1', 'vod'
   );
 
-  logger.info(`提交${label}上传确认: ${commitUrl}`);
+  logger.info(`Committing ${label} upload: ${commitUrl}`);
 
   const commitResponse = await fetch(commitUrl, {
     method: 'POST',
@@ -886,34 +886,34 @@ async function uploadMediaForVideo(
 
   if (!commitResponse.ok) {
     const errorText = await commitResponse.text();
-    throw new Error(`提交${label}上传失败: ${commitResponse.status} - ${errorText}`);
+    throw new Error(`${label} upload commit failed: ${commitResponse.status} - ${errorText}`);
   }
 
   const commitResult: any = await commitResponse.json();
   if (commitResult?.ResponseMetadata?.Error) {
-    throw new Error(`提交${label}上传失败: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+    throw new Error(`${label} upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
   }
 
   if (!commitResult?.Result?.Results || commitResult.Result.Results.length === 0) {
-    throw new Error(`提交${label}上传响应缺少结果: ${JSON.stringify(commitResult)}`);
+    throw new Error(`${label} upload commit response missing result: ${JSON.stringify(commitResult)}`);
   }
 
   const result = commitResult.Result.Results[0];
   if (!result.Vid) {
-    throw new Error(`提交${label}上传响应缺少 Vid: ${JSON.stringify(result)}`);
+    throw new Error(`${label} upload commit response missing Vid: ${JSON.stringify(result)}`);
   }
 
-  // 从 VOD 返回的元数据中获取信息（音频有 Duration）
+  // 从 VOD 返回的元数据中Getting 信息（audio有 Duration）
   const videoMeta = result.VideoMeta || {};
   let duration = videoMeta.Duration ? Math.round(videoMeta.Duration * 1000) : 0;
 
-  // 如果 VOD 未返回时长，用本地解析兜底
+  // 如果 VOD did not return 时长，用本地解析兜底
   if (duration <= 0 && mediaType === "audio") {
     duration = parseAudioDuration(buffer);
-    logger.info(`VOD 未返回${label}时长，本地解析: ${duration}ms`);
+    logger.info(`VOD did not return ${label} duration, parsed locally: ${duration}ms`);
   }
 
-  logger.info(`${label}上传完成: vid=${result.Vid}, duration=${duration}ms`);
+  logger.info(`${label} upload complete: vid=${result.Vid}, duration=${duration}ms`);
 
   return {
     vid: result.Vid,
@@ -925,16 +925,16 @@ async function uploadMediaForVideo(
 }
 
 /**
- * 通过 get_local_item_list API 获取高质量视频下载URL
- * 浏览器下载视频时使用此API获取高码率版本（~6297 vs 预览版 ~1152）
+ * 通过 get_local_item_list API Getting 高质量video下载URL
+ * 浏览器下载video时使用此APIGetting 高码率版本（~6297 vs 预览版 ~1152）
  *
- * @param itemId 视频项目ID
+ * @param itemId video项目ID
  * @param refreshToken 刷新令牌
- * @returns 高质量视频URL，失败时返回 null
+ * @returns 高质量videoURL，失败时返回 null
  */
 async function fetchHighQualityVideoUrl(itemId: string, refreshToken: string): Promise<string | null> {
   try {
-    logger.info(`尝试获取高质量视频下载URL，item_id: ${itemId}`);
+    logger.info(`Fetching HQ video download URL, item_id: ${itemId}`);
 
     const result = await request("post", "/mweb/v1/get_local_item_list", refreshToken, {
       data: {
@@ -948,9 +948,9 @@ async function fetchHighQualityVideoUrl(itemId: string, refreshToken: string): P
     });
 
     const responseStr = JSON.stringify(result);
-    logger.info(`get_local_item_list 响应大小: ${responseStr.length} 字符`);
+    logger.info(`get_local_item_list response size: ${responseStr.length} chars`);
 
-    // 策略1: 从结构化字段中提取视频URL
+    // 策略1: 从结构化字段中提取videoURL
     const itemList = result.item_list || result.local_item_list || [];
     if (itemList.length > 0) {
       const item = itemList[0];
@@ -961,7 +961,7 @@ async function fetchHighQualityVideoUrl(itemId: string, refreshToken: string): P
         item?.video?.url;
 
       if (videoUrl) {
-        logger.info(`从get_local_item_list结构化字段获取到高清视频URL: ${videoUrl}`);
+        logger.info(`Found HQ video URL from structured field: ${videoUrl}`);
         return videoUrl;
       }
     }
@@ -969,28 +969,28 @@ async function fetchHighQualityVideoUrl(itemId: string, refreshToken: string): P
     // 策略2: 正则匹配 dreamnia.jimeng.com 高质量URL
     const hqUrlMatch = responseStr.match(/https:\/\/v[0-9]+-dreamnia\.jimeng\.com\/[^"\s\\]+/);
     if (hqUrlMatch && hqUrlMatch[0]) {
-      logger.info(`正则提取到高质量视频URL (dreamnia): ${hqUrlMatch[0]}`);
+      logger.info(`Regex matched HQ video URL (dreamnia): ${hqUrlMatch[0]}`);
       return hqUrlMatch[0];
     }
 
-    // 策略3: 匹配任何 jimeng.com 域名的视频URL
+    // 策略3: 匹配任何 jimeng.com 域名的videoURL
     const jimengUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.jimeng\.com\/[^"\s\\]+/);
     if (jimengUrlMatch && jimengUrlMatch[0]) {
-      logger.info(`正则提取到jimeng视频URL: ${jimengUrlMatch[0]}`);
+      logger.info(`Regex matched jimeng video URL: ${jimengUrlMatch[0]}`);
       return jimengUrlMatch[0];
     }
 
-    // 策略4: 匹配任何视频URL（兜底）
+    // 策略4: 匹配任何videoURL（兜底）
     const anyVideoUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.(vlabvod|jimeng)\.com\/[^"\s\\]+/);
     if (anyVideoUrlMatch && anyVideoUrlMatch[0]) {
-      logger.info(`从get_local_item_list提取到视频URL: ${anyVideoUrlMatch[0]}`);
+      logger.info(`Extracted video URL from get_local_item_list: ${anyVideoUrlMatch[0]}`);
       return anyVideoUrlMatch[0];
     }
 
-    logger.warn(`未能从get_local_item_list响应中提取到视频URL`);
+    logger.warn(`Could not extract video URL from get_local_item_list response`);
     return null;
   } catch (error) {
-    logger.warn(`获取高质量视频下载URL失败: ${error.message}`);
+    logger.warn(`Failed to fetch HQ video download URL: ${error.message}`);
     return null;
   }
 }
@@ -1062,7 +1062,7 @@ export async function checkVideoJobStatus(
 
     if (videoUrl) return { status: 'completed', url: videoUrl };
 
-    return { status: 'failed', error: '未能获取视频URL' };
+    return { status: 'failed', error: '未能Getting videoURL' };
   } catch (err: any) {
     logger.error(`checkVideoJobStatus: API error for historyId=${historyId}: ${err.message}`);
     return { status: 'processing' };
@@ -1070,13 +1070,13 @@ export async function checkVideoJobStatus(
 }
 
 /**
- * 生成视频
+ * 生成video
  *
  * @param _model 模型名称
  * @param prompt 提示词
  * @param options 选项
  * @param refreshToken 刷新令牌
- * @returns 视频URL
+ * @returns videoURL
  */
 export async function generateVideo(
   _model: string,
@@ -1099,10 +1099,10 @@ export async function generateVideo(
 ): Promise<string | null> {
   const model = getModel(_model);
 
-  // 解析分辨率参数获取实际的宽高
+  // 解析分辨率参数Getting 实际的宽高
   const { width, height } = resolveVideoResolution(resolution, ratio);
 
-  logger.info(`使用模型: ${_model} 映射模型: ${model} ${width}x${height} (${ratio}@${resolution}) 时长: ${duration}秒`);
+  logger.info(`Model: ${_model} -> mapped: ${model} ${width}x${height} (${ratio}@${resolution}) duration: ${duration}s`);
 
   // 检查积分
   const { totalCredit } = await getCredit(refreshToken);
@@ -1116,17 +1116,17 @@ export async function generateVideo(
   // 处理上传的文件（multipart/form-data）
   if (files && files.length > 0) {
     let uploadIDs: string[] = [];
-    logger.info(`开始处理 ${files.length} 个上传文件用于视频生成`);
+    logger.info(`Processing ${files.length} uploaded file(s) for video generation`);
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger.warn(`第 ${i + 1} 个文件无效，跳过`);
+        logger.warn(`File ${i + 1} is invalid, skipping`);
         continue;
       }
 
       try {
-        logger.info(`开始上传第 ${i + 1} 个文件: ${file.originalFilename || file.filepath}`);
+        logger.info(`Uploading file ${i + 1}: ${file.originalFilename || file.filepath}`);
 
         // 读取文件内容并上传
         const buffer = fs.readFileSync(file.filepath);
@@ -1134,27 +1134,27 @@ export async function generateVideo(
 
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger.info(`第 ${i + 1} 个文件上传成功: ${imageUri}`);
+          logger.info(`File ${i + 1} uploaded: ${imageUri}`);
         } else {
-          logger.error(`第 ${i + 1} 个文件上传失败: 未获取到 image_uri`);
+          logger.error(`File ${i + 1} upload failed: no image_uri returned`);
         }
       } catch (error) {
-        logger.error(`第 ${i + 1} 个文件上传失败: ${error.message}`);
+        logger.error(`File ${i + 1} upload failed: ${error.message}`);
 
         if (i === 0) {
-          logger.error(`首帧文件上传失败，停止视频生成以避免浪费积分`);
-          throw new APIException(EX.API_REQUEST_FAILED, `首帧文件上传失败: ${error.message}`);
+          logger.error(`First-frame file upload failed, stopping to avoid wasting credits`);
+          throw new APIException(EX.API_REQUEST_FAILED, `First-frame file upload failed: ${error.message}`);
         } else {
-          logger.warn(`第 ${i + 1} 个文件上传失败，将跳过此文件继续处理`);
+          logger.warn(`File ${i + 1} upload failed, skipping and continuing`);
         }
       }
     }
 
-    logger.info(`文件上传完成，成功上传 ${uploadIDs.length} 个文件`);
+    logger.info(`File uploads complete: ${uploadIDs.length} file(s)`);
 
     if (uploadIDs.length === 0) {
-      logger.error(`所有文件上传失败，停止视频生成以避免浪费积分`);
-      throw new APIException(EX.API_REQUEST_FAILED, '所有文件上传失败，请检查文件是否有效');
+      logger.error(`All file uploads failed, stopping to avoid wasting credits`);
+      throw new APIException(EX.API_REQUEST_FAILED, 'All file uploads failed, please check that the files are valid');
     }
 
     // 构建首帧图片对象
@@ -1171,7 +1171,7 @@ export async function generateVideo(
         uri: uploadIDs[0],
         width: width,
       };
-      logger.info(`设置首帧图片: ${uploadIDs[0]}`);
+      logger.info(`Set first-frame image: ${uploadIDs[0]}`);
     }
 
     // 构建尾帧图片对象
@@ -1188,50 +1188,50 @@ export async function generateVideo(
         uri: uploadIDs[1],
         width: width,
       };
-      logger.info(`设置尾帧图片: ${uploadIDs[1]}`);
+      logger.info(`Set last-frame image: ${uploadIDs[1]}`);
     }
   } else if (filePaths && filePaths.length > 0) {
     let uploadIDs: string[] = [];
-    logger.info(`开始上传 ${filePaths.length} 张图片用于视频生成`);
+    logger.info(`Uploading  ${filePaths.length} image(s) for video generation`);
     
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) {
-        logger.warn(`第 ${i + 1} 张图片路径为空，跳过`);
+        logger.warn(`Image ${i + 1} path is empty, skipping`);
         continue;
       }
       
       try {
-        logger.info(`开始上传第 ${i + 1} 张图片: ${filePath}`);
+        logger.info(`Uploading image ${i + 1}: ${filePath}`);
         
         // 使用Amazon S3上传方式
         const imageUri = await uploadImageForVideo(filePath, refreshToken);
         
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger.info(`第 ${i + 1} 张图片上传成功: ${imageUri}`);
+          logger.info(`Image ${i + 1} uploaded: ${imageUri}`);
         } else {
-          logger.error(`第 ${i + 1} 张图片上传失败: 未获取到 image_uri`);
+          logger.error(`Image ${i + 1} upload failed: no image_uri returned`);
         }
       } catch (error) {
-        logger.error(`第 ${i + 1} 张图片上传失败: ${error.message}`);
+        logger.error(`Image ${i + 1} upload failed: ${error.message}`);
         
-        // 图片上传失败时，停止视频生成避免浪费积分
+        // 图片上传失败时，停止video生成避免浪费积分
         if (i === 0) {
-          logger.error(`首帧图片上传失败，停止视频生成以避免浪费积分`);
-          throw new APIException(EX.API_REQUEST_FAILED, `首帧图片上传失败: ${error.message}`);
+          logger.error(`First-frame image upload failed, stopping to avoid wasting credits`);
+          throw new APIException(EX.API_REQUEST_FAILED, `First-frame image upload failed: ${error.message}`);
         } else {
-          logger.warn(`第 ${i + 1} 张图片上传失败，将跳过此图片继续处理`);
+          logger.warn(`Image ${i + 1} upload failed, skipping and continuing`);
         }
       }
     }
     
-    logger.info(`图片上传完成，成功上传 ${uploadIDs.length} 张图片`);
+    logger.info(`Image uploads complete: ${uploadIDs.length} image(s)`);
     
-    // 如果没有成功上传任何图片，停止视频生成
+    // 如果没有成功上传任何图片，停止video生成
     if (uploadIDs.length === 0) {
-      logger.error(`所有图片上传失败，停止视频生成以避免浪费积分`);
-      throw new APIException(EX.API_REQUEST_FAILED, '所有图片上传失败，请检查图片URL是否有效');
+      logger.error(`All image uploads failed, stopping to avoid wasting credits`);
+      throw new APIException(EX.API_REQUEST_FAILED, 'All image uploads failed, please check that the image URLs are valid');
     }
     
     // 构建首帧图片对象
@@ -1248,7 +1248,7 @@ export async function generateVideo(
         uri: uploadIDs[0],
         width: width,
       };
-      logger.info(`设置首帧图片: ${uploadIDs[0]}`);
+      logger.info(`Set first-frame image: ${uploadIDs[0]}`);
     }
     
     // 构建尾帧图片对象
@@ -1265,12 +1265,12 @@ export async function generateVideo(
         uri: uploadIDs[1],
         width: width,
       };
-      logger.info(`设置尾帧图片: ${uploadIDs[1]}`);
+      logger.info(`Set last-frame image: ${uploadIDs[1]}`);
     } else if (filePaths.length > 1) {
-      logger.warn(`第二张图片上传失败或未提供，将仅使用首帧图片`);
+      logger.warn(`Second image upload failed or not provided, using first-frame only`);
     }
   } else {
-    logger.info(`未提供图片文件，将进行纯文本视频生成`);
+    logger.info(`No image files provided, generating video from text only`);
   }
 
   const componentId = util.uuid();
@@ -1282,10 +1282,10 @@ export async function generateVideo(
     "originSubmitId": util.uuid(),
   });
   
-  // 获取当前模型的 draft 版本
+  // Getting 当前模型的 draft 版本
   const draftVersion = MODEL_DRAFT_VERSIONS[_model] || DEFAULT_DRAFT_VERSION;
   
-  // 计算视频宽高比
+  // 计算video宽高比
   const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
   const divisor = gcd(width, height);
   const aspectRatio = `${width / divisor}:${height / divisor}`;
@@ -1380,7 +1380,7 @@ export async function generateVideo(
 
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(EX.API_IMAGE_GENERATION_FAILED, "记录ID不存在");
+    throw new APIException(EX.API_IMAGE_GENERATION_FAILED, "History ID not found");
 
   logger.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
@@ -1393,14 +1393,14 @@ export async function generateVideo(
 }
 
 /**
- * Seedance 2.0 多图智能视频生成
- * 支持多张图片与文本混合生成视频
+ * Seedance 2.0 多图智能video生成
+ * 支持多张图片与文本混合生成video
  *
  * @param _model 模型名称
  * @param prompt 提示词（支持 @1 @2 等引用图片占位符）
  * @param options 选项
  * @param refreshToken 刷新令牌
- * @returns 视频URL
+ * @returns videoURL
  */
 export async function generateSeedanceVideo(
   _model: string,
@@ -1424,46 +1424,46 @@ export async function generateSeedanceVideo(
   const model = getModel(_model);
   const benefitType = SEEDANCE_BENEFIT_TYPE_MAP[_model] || "dreamina_video_seedance_20_pro";
 
-  // Seedance 2.0 默认时长为4秒
+  // Seedance 2.0 默认时长为4s
   const actualDuration = duration || 4;
 
-  // 解析分辨率参数获取实际的宽高
+  // 解析分辨率参数Getting 实际的宽高
   const { width, height } = resolveVideoResolution(resolution, ratio);
 
-  logger.info(`Seedance 2.0 生成: 模型=${_model} 映射=${model} ${width}x${height} (${ratio}@${resolution}) 时长=${actualDuration}秒`);
+  logger.info(`Seedance generation: model=${_model} -> mapped=${model} ${width}x${height} (${ratio}@${resolution}) duration=${actualDuration}s`);
 
   // 检查积分
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
 
-  // 上传所有文件（支持图片/视频/音频）
+  // 上传所有文件（支持图片/video/audio）
   let uploadedMaterials: UploadedMaterial[] = [];
 
   // 处理上传的文件（multipart/form-data）
   if (files && files.length > 0) {
-    logger.info(`Seedance: 开始处理 ${files.length} 个上传文件`);
+    logger.info(`Seedance: Processing ${files.length} uploaded file(s)`);
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger.warn(`Seedance: 第 ${i + 1} 个文件无效，跳过`);
+        logger.warn(`Seedance: file ${i + 1} file(s) invalid, skipping`);
         continue;
       }
 
       const materialType = detectMaterialType(file);
       try {
-        logger.info(`Seedance: 开始上传第 ${i + 1} 个文件 (${materialType}): ${file.originalFilename || file.filepath}`);
+        logger.info(`Seedance: uploading file ${i + 1} (${materialType}): ${file.originalFilename || file.filepath}`);
         const buffer = fs.readFileSync(file.filepath);
 
         if (materialType === "image") {
           const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger.info(`Seedance: 第 ${i + 1} 个图片上传成功: ${imageUri}`);
+            logger.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
           }
         } else {
-          // 视频或音频 → VOD 上传
+          // video或audio → VOD 上传
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken, file.originalFilename);
           uploadedMaterials.push({
             type: materialType,
@@ -1474,17 +1474,17 @@ export async function generateSeedanceVideo(
             fps: vodResult.fps,
             name: file.originalFilename || "",
           });
-          logger.info(`Seedance: 第 ${i + 1} 个${materialType === "video" ? "视频" : "音频"}上传成功: ${vodResult.vid}`);
+          logger.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger.error(`Seedance: 第 ${i + 1} 个文件上传失败: ${error.message}`);
+        logger.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
         if (i === 0) {
-          throw new APIException(EX.API_REQUEST_FAILED, `首个文件上传失败: ${error.message}`);
+          throw new APIException(EX.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
         }
       }
     }
   } else if (filePaths && filePaths.length > 0) {
-    logger.info(`Seedance: 开始上传 ${filePaths.length} 个文件`);
+    logger.info(`Seedance: Uploading  ${filePaths.length} file(s)`);
 
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
@@ -1492,18 +1492,18 @@ export async function generateSeedanceVideo(
 
       const materialType = detectMaterialTypeFromUrl(filePath);
       try {
-        logger.info(`Seedance: 开始上传第 ${i + 1} 个文件 (${materialType}): ${filePath}`);
+        logger.info(`Seedance: uploading file ${i + 1} (${materialType}): ${filePath}`);
 
         if (materialType === "image") {
           const imageUri = await uploadImageForVideo(filePath, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger.info(`Seedance: 第 ${i + 1} 个图片上传成功: ${imageUri}`);
+            logger.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
           }
         } else {
-          // 视频或音频 URL → 下载后 VOD 上传
+          // video或audio URL → 下载后 VOD 上传
           const response = await fetch(filePath);
-          if (!response.ok) throw new Error(`下载文件失败: ${response.status}`);
+          if (!response.ok) throw new Error(`File download failed: ${response.status}`);
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken);
@@ -1515,28 +1515,28 @@ export async function generateSeedanceVideo(
             duration: vodResult.duration,
             fps: vodResult.fps,
           });
-          logger.info(`Seedance: 第 ${i + 1} 个${materialType === "video" ? "视频" : "音频"}上传成功: ${vodResult.vid}`);
+          logger.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger.error(`Seedance: 第 ${i + 1} 个文件上传失败: ${error.message}`);
+        logger.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
         if (i === 0) {
-          throw new APIException(EX.API_REQUEST_FAILED, `首个文件上传失败: ${error.message}`);
+          throw new APIException(EX.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
         }
       }
     }
   }
 
   if (uploadedMaterials.length === 0) {
-    throw new APIException(EX.API_REQUEST_FAILED, 'Seedance 2.0 需要至少一个文件（图片/视频/音频）');
+    throw new APIException(EX.API_REQUEST_FAILED, 'Seedance 2.0 requires at least one file (image/video/audio)');
   }
 
-  logger.info(`Seedance: 成功上传 ${uploadedMaterials.length} 个文件`);
+  logger.info(`Seedance: uploaded ${uploadedMaterials.length} file(s)`);
 
-  // 动态 benefit_type：包含视频素材时追加 _with_video 后缀
+  // 动态 benefit_type：包含video素材时追加 _with_video 后缀
   const hasVideoMaterial = uploadedMaterials.some(m => m.type === "video");
   const finalBenefitType = hasVideoMaterial ? `${benefitType}_with_video` : benefitType;
 
-  // 构建 material_list（支持图片/视频/音频）
+  // 构建 material_list（支持图片/video/audio）
   const materialList = uploadedMaterials.map((mat) => {
     const base = { type: "", id: util.uuid() };
     if (mat.type === "image") {
@@ -1597,7 +1597,7 @@ export async function generateSeedanceVideo(
   const submitId = util.uuid();
   const draftVersion = MODEL_DRAFT_VERSIONS[_model] || "3.3.9";
 
-  // 计算视频宽高比
+  // 计算video宽高比
   const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
   const divisor = gcd(width, height);
   const aspectRatio = `${width / divisor}:${height / divisor}`;
@@ -1718,7 +1718,7 @@ export async function generateSeedanceVideo(
     },
   };
 
-  logger.info(`Seedance: 通过浏览器代理发送 generate 请求...`);
+  logger.info(`Seedance: sending generate request via browser proxy...`);
   await acquireBrowserSlot(token.substring(0, 8));
   let generateResult;
   try {
@@ -1739,15 +1739,15 @@ export async function generateSeedanceVideo(
   const { ret, errmsg, data: generateData } = generateResult;
   if (ret !== undefined && Number(ret) !== 0) {
     if (Number(ret) === 5000) {
-      throw new APIException(EX.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[无法生成视频]: 即梦积分可能不足，${errmsg}`);
+      throw new APIException(EX.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Video generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
     }
-    throw new APIException(EX.API_REQUEST_FAILED, `[请求jimeng失败]: ${errmsg}`);
+    throw new APIException(EX.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
   }
   const aigc_data = generateData?.aigc_data || generateResult.aigc_data;
 
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(EX.API_IMAGE_GENERATION_FAILED, "记录ID不存在");
+    throw new APIException(EX.API_IMAGE_GENERATION_FAILED, "History ID not found");
 
   logger.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
@@ -1804,7 +1804,7 @@ function buildMetaListFromPrompt(prompt: string, materials: Array<{ type: Seedan
     }
   }
 
-  // 如果没有找到任何占位符，默认引用所有素材并附加整个prompt作为文本
+  // 如果没有找到任何占位符，默认引用所有素材并附加整prompt作为文本
   if (metaList.length === 0) {
     // 先添加所有素材引用
     for (let i = 0; i < materialCount; i++) {
@@ -1824,7 +1824,7 @@ function buildMetaListFromPrompt(prompt: string, materials: Array<{ type: Seedan
     if (prompt && prompt.trim()) {
       metaList.push({ meta_type: "text", text: `素材，${prompt}` });
     } else {
-      metaList.push({ meta_type: "text", text: "素材生成视频" });
+      metaList.push({ meta_type: "text", text: "素材生成video" });
     }
   }
 

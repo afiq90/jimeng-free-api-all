@@ -827,9 +827,7 @@ async function getCredit(refreshToken) {
       // Sign: "f3dbb824b378abea7c03cbb152b3a365"
     }
   });
-  logger_default.info(`
-\u79EF\u5206\u4FE1\u606F: 
-\u8D60\u9001\u79EF\u5206: ${gift_credit}, \u8D2D\u4E70\u79EF\u5206: ${purchase_credit}, VIP\u79EF\u5206: ${vip_credit}`);
+  logger_default.info(`Credits: gift=${gift_credit}, purchased=${purchase_credit}, VIP=${vip_credit}`);
   return {
     giftCredit: gift_credit,
     purchaseCredit: purchase_credit,
@@ -838,7 +836,7 @@ async function getCredit(refreshToken) {
   };
 }
 async function receiveCredit(refreshToken) {
-  logger_default.info("\u6B63\u5728\u6536\u53D6\u4ECA\u65E5\u79EF\u5206...");
+  logger_default.info("Claiming daily credits...");
   const { cur_total_credits, receive_quota } = await request("POST", "/commerce/v1/benefits/credit_receive", refreshToken, {
     data: {
       time_zone: "Asia/Shanghai"
@@ -847,9 +845,7 @@ async function receiveCredit(refreshToken) {
       Referer: "https://jimeng.jianying.com/ai-tool/image/generate"
     }
   });
-  logger_default.info(`
-\u4ECA\u65E5${receive_quota}\u79EF\u5206\u6536\u53D6\u6210\u529F
-\u5269\u4F59\u79EF\u5206: ${cur_total_credits}`);
+  logger_default.info(`Daily credits claimed: ${receive_quota}. Remaining balance: ${cur_total_credits}`);
   return cur_total_credits;
 }
 async function request(method, uri, refreshToken, options = {}) {
@@ -878,16 +874,16 @@ async function request(method, uri, refreshToken, options = {}) {
     "Sign-Ver": "1",
     ...options.headers || {}
   };
-  logger_default.info(`\u53D1\u9001\u8BF7\u6C42: ${method.toUpperCase()} ${fullUrl}`);
-  logger_default.info(`\u8BF7\u6C42\u53C2\u6570: ${JSON.stringify(requestParams)}`);
-  logger_default.info(`\u8BF7\u6C42\u6570\u636E: ${JSON.stringify(options.data || {})}`);
+  logger_default.info(`Sending request: ${method.toUpperCase()} ${fullUrl}`);
+  logger_default.info(`Request params: ${JSON.stringify(requestParams)}`);
+  logger_default.info(`Request data: ${JSON.stringify(options.data || {})}`);
   let retries = 0;
   const maxRetries = 3;
   let lastError = null;
   while (retries <= maxRetries) {
     try {
       if (retries > 0) {
-        logger_default.info(`\u7B2C ${retries} \u6B21\u91CD\u8BD5\u8BF7\u6C42: ${method.toUpperCase()} ${fullUrl}`);
+        logger_default.info(`Retry #${retries} ${method.toUpperCase()} ${fullUrl}`);
         await new Promise((resolve) => setTimeout(resolve, 1e3 * retries));
       }
       const response = await axios2.request({
@@ -901,12 +897,12 @@ async function request(method, uri, refreshToken, options = {}) {
         // 允许任何状态码
         ..._7.omit(options, "params", "headers")
       });
-      logger_default.info(`\u54CD\u5E94\u72B6\u6001: ${response.status} ${response.statusText}`);
+      logger_default.info(`Response status: ${response.status} ${response.statusText}`);
       if (options.responseType == "stream") return response;
       const responseDataSummary = JSON.stringify(response.data).substring(0, 500) + (JSON.stringify(response.data).length > 500 ? "..." : "");
-      logger_default.info(`\u54CD\u5E94\u6570\u636E\u6458\u8981: ${responseDataSummary}`);
+      logger_default.info(`Response data summary: ${responseDataSummary}`);
       if (response.status >= 400) {
-        logger_default.warn(`HTTP\u9519\u8BEF: ${response.status} ${response.statusText}`);
+        logger_default.warn(`HTTP error: ${response.status} ${response.statusText}`);
         if (retries < maxRetries) {
           retries++;
           continue;
@@ -915,7 +911,7 @@ async function request(method, uri, refreshToken, options = {}) {
       return checkResult(response);
     } catch (error) {
       lastError = error;
-      logger_default.error(`\u8BF7\u6C42\u5931\u8D25 (\u5C1D\u8BD5 ${retries + 1}/${maxRetries + 1}): ${error.message}`);
+      logger_default.error(`Request failed (attempt ${retries + 1}/${maxRetries + 1}): ${error.message}`);
       if ((error.code === "ECONNABORTED" || error.code === "ETIMEDOUT" || error.message.includes("timeout") || error.message.includes("network")) && retries < maxRetries) {
         retries++;
         continue;
@@ -923,10 +919,10 @@ async function request(method, uri, refreshToken, options = {}) {
       break;
     }
   }
-  logger_default.error(`\u8BF7\u6C42\u5931\u8D25\uFF0C\u5DF2\u91CD\u8BD5 ${retries} \u6B21: ${lastError.message}`);
+  logger_default.error(`All retries exhausted after ${retries} retries: ${lastError.message}`);
   if (lastError.response) {
-    logger_default.error(`\u54CD\u5E94\u72B6\u6001: ${lastError.response.status}`);
-    logger_default.error(`\u54CD\u5E94\u6570\u636E: ${JSON.stringify(lastError.response.data)}`);
+    logger_default.error(`Response status: ${lastError.response.status}`);
+    logger_default.error(`Response data: ${JSON.stringify(lastError.response.data)}`);
   }
   throw lastError;
 }
@@ -935,8 +931,8 @@ function checkResult(result) {
   if (!_7.isFinite(Number(ret))) return result.data;
   if (ret === "0") return data;
   if (ret === "5000")
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[\u65E0\u6CD5\u751F\u6210\u56FE\u50CF]: \u5373\u68A6\u79EF\u5206\u53EF\u80FD\u4E0D\u8DB3\uFF0C${errmsg}`);
-  throw new APIException(exceptions_default.API_REQUEST_FAILED, `[\u8BF7\u6C42jimeng\u5931\u8D25]: ${errmsg}`);
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
+  throw new APIException(exceptions_default.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
 }
 function tokenSplit(authorization) {
   return authorization.replace("Bearer ", "").split(",");
@@ -973,7 +969,7 @@ function findChromiumPath() {
   try {
     const playwrightPath = chromium.executablePath();
     if (playwrightPath && fs6.existsSync(playwrightPath)) {
-      logger_default.info(`BrowserService: \u4F7F\u7528 Playwright \u5185\u7F6E Chromium: ${playwrightPath}`);
+      logger_default.info(`BrowserService: using Playwright built-in Chromium: ${playwrightPath}`);
       cachedChromiumPath = playwrightPath;
       return cachedChromiumPath;
     }
@@ -1010,7 +1006,7 @@ function killTrackedBrowserProcess() {
   try {
     execSync(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
     execSync(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
-    logger_default.info(`BrowserService: \u5DF2\u6E05\u7406\u6B8B\u7559\u6D4F\u89C8\u5668\u8FDB\u7A0B (pid: ${trackedBrowserPid})`);
+    logger_default.info(`BrowserService: killed stale browser process (pid: ${trackedBrowserPid})`);
   } catch {
   }
   trackedBrowserPid = null;
@@ -1059,7 +1055,7 @@ var BrowserService = class {
     }
     const elapsed = Date.now() - this.apiLastFailureTime;
     if (elapsed > API_CIRCUIT_BREAKER_COOLDOWN) {
-      logger_default.info(`BrowserService: API\u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
+      logger_default.info(`BrowserService: API circuit breaker cooled (${Math.round(elapsed / 1e3)}s), allowing retry`);
       this.apiConsecutiveFailures = 0;
       return false;
     }
@@ -1071,7 +1067,7 @@ var BrowserService = class {
     }
     const elapsed = Date.now() - this.browserLastFailureTime;
     if (elapsed > BROWSER_CIRCUIT_BREAKER_COOLDOWN) {
-      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u51B7\u5374\u5B8C\u6BD5 (${Math.round(elapsed / 1e3)}s)\uFF0C\u5141\u8BB8\u91CD\u8BD5`);
+      logger_default.info(`BrowserService: browser circuit breaker cooled (${Math.round(elapsed / 1e3)}s), allowing retry`);
       this.browserConsecutiveFailures = 0;
       return false;
     }
@@ -1080,51 +1076,51 @@ var BrowserService = class {
   recordApiFailure() {
     this.apiConsecutiveFailures++;
     this.apiLastFailureTime = Date.now();
-    logger_default.warn(`BrowserService: API\u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
+    logger_default.warn(`BrowserService: API consecutive failures: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
     if (this.apiConsecutiveFailures >= API_CIRCUIT_BREAKER_THRESHOLD) {
-      logger_default.warn(`BrowserService: API\u7194\u65AD\u5668\u5DF2\u6253\u5F00\uFF0C\u51B7\u5374 ${API_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
+      logger_default.warn(`BrowserService: API circuit breaker OPEN, cooling for ${API_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
       this.scheduleApiRecovery();
     }
   }
   recordApiSuccess() {
     if (this.apiConsecutiveFailures > 0) {
-      logger_default.info(`BrowserService: API\u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.apiConsecutiveFailures} \u6B21)`);
+      logger_default.info(`BrowserService: API recovered, circuit breaker reset (was ${this.apiConsecutiveFailures} consecutive failures)`);
     }
     this.apiConsecutiveFailures = 0;
   }
   recordBrowserFailure() {
     this.browserConsecutiveFailures++;
     this.browserLastFailureTime = Date.now();
-    logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u8FDE\u7EED\u5931\u8D25\u6B21\u6570: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
+    logger_default.warn(`BrowserService: browser consecutive failures: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
     if (this.browserConsecutiveFailures >= BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u5DF2\u6253\u5F00\uFF0C\u51B7\u5374 ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
+      logger_default.warn(`BrowserService: browser circuit breaker OPEN, cooling for ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
       this.scheduleBrowserRecovery();
     }
   }
   recordBrowserSuccess() {
     if (this.browserConsecutiveFailures > 0) {
-      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u6062\u590D\u6210\u529F\uFF0C\u91CD\u7F6E\u7194\u65AD\u5668 (\u4E4B\u524D\u8FDE\u7EED\u5931\u8D25 ${this.browserConsecutiveFailures} \u6B21)`);
+      logger_default.info(`BrowserService: browser recovered, circuit breaker reset (was ${this.browserConsecutiveFailures} consecutive failures)`);
     }
     this.browserConsecutiveFailures = 0;
   }
   scheduleApiRecovery() {
     setTimeout(() => {
-      logger_default.info(`BrowserService: API\u7194\u65AD\u5668\u51B7\u5374\u7ED3\u675F\uFF0C\u91CD\u7F6E\u8BA1\u6570`);
+      logger_default.info(`BrowserService: API circuit breaker cooldown ended, counter reset`);
       this.apiConsecutiveFailures = 0;
     }, API_CIRCUIT_BREAKER_COOLDOWN + 1e3);
   }
   scheduleBrowserRecovery() {
     setTimeout(() => {
       if (this.isReady() || this.launching) {
-        logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u68C0\u67E5\uFF1A\u6D4F\u89C8\u5668\u5DF2\u5C31\u7EEA\uFF0C\u65E0\u9700\u91CD\u8FDE`);
+        logger_default.info(`BrowserService: browser circuit breaker recovery check: browser ready, no reconnect needed`);
         return;
       }
-      logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u51B7\u5374\u7ED3\u675F\uFF0C\u5C1D\u8BD5\u6062\u590D...`);
+      logger_default.info(`BrowserService: browser circuit breaker cooldown ended, attempting recovery...`);
       this.browserConsecutiveFailures = 0;
       this.ensureBrowser().then(() => {
-        logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u6210\u529F`);
+        logger_default.info(`BrowserService: browser circuit breaker recovered successfully`);
       }).catch((err) => {
-        logger_default.error(`BrowserService: \u6D4F\u89C8\u5668\u7194\u65AD\u5668\u6062\u590D\u5931\u8D25: ${err.message}`);
+        logger_default.error(`BrowserService: browser circuit breaker recovery failed: ${err.message}`);
       });
     }, BROWSER_CIRCUIT_BREAKER_COOLDOWN + 1e3);
   }
@@ -1132,16 +1128,16 @@ var BrowserService = class {
     if (this.launching || this.isBrowserCircuitOpen()) {
       return;
     }
-    logger_default.info(`BrowserService: \u542F\u52A8\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE (${PROACTIVE_RECONNECT_DELAY}ms \u540E)...`);
+    logger_default.info(`BrowserService: scheduling proactive reconnect (in ${PROACTIVE_RECONNECT_DELAY}ms)...`);
     setTimeout(() => {
       if (this.isReady() || this.launching || this.isBrowserCircuitOpen()) {
         return;
       }
-      logger_default.info(`BrowserService: \u6267\u884C\u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE...`);
+      logger_default.info(`BrowserService: executing proactive background reconnect...`);
       this.ensureBrowser().then(() => {
-        logger_default.info(`BrowserService: \u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE\u6210\u529F`);
+        logger_default.info(`BrowserService: proactive reconnect succeeded`);
       }).catch((err) => {
-        logger_default.error(`BrowserService: \u4E3B\u52A8\u540E\u53F0\u91CD\u8FDE\u5931\u8D25: ${err.message}`);
+        logger_default.error(`BrowserService: proactive reconnect failed: ${err.message}`);
       });
     }, PROACTIVE_RECONNECT_DELAY);
   }
@@ -1152,7 +1148,7 @@ var BrowserService = class {
     }
     if (this.isBrowserCircuitOpen()) {
       const remaining = Math.round((BROWSER_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.browserLastFailureTime)) / 1e3);
-      throw new Error(`BrowserService: \u6D4F\u89C8\u5668\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remaining}s \u540E\u91CD\u8BD5`);
+      throw new Error(`BrowserService: browser temporarily unavailable, retry in ${remaining}s`);
     }
     if (this.launching) {
       return this.launching;
@@ -1160,9 +1156,9 @@ var BrowserService = class {
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
       const memInfo = getSystemMemoryInfo();
-      logger_default.info(`BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
+      logger_default.info(`BrowserService: launching Chromium... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
       if (memInfo.freeMB < 200) {
-        logger_default.warn(`BrowserService: \u53EF\u7528\u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB)\uFF0C\u5C1D\u8BD5\u6E05\u7406\u540E\u542F\u52A8...`);
+        logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, cleaning up before launch...`);
         killTrackedBrowserProcess();
         await new Promise((r) => setTimeout(r, 2e3));
       }
@@ -1171,7 +1167,7 @@ var BrowserService = class {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           if (attempt > 1) {
-            logger_default.info(`BrowserService: \u91CD\u8BD5\u524D\u6E05\u7406\u6B8B\u7559\u8FDB\u7A0B... (attempt ${attempt})`);
+            logger_default.info(`BrowserService: cleaning up stale processes before retry... (attempt ${attempt})`);
             killTrackedBrowserProcess();
             await new Promise((r) => setTimeout(r, 3e3));
           }
@@ -1215,13 +1211,13 @@ var BrowserService = class {
             const serverProcess = this.browser._browserProcess || this.browser._process;
             if (serverProcess == null ? void 0 : serverProcess.pid) {
               trackedBrowserPid = serverProcess.pid;
-              logger_default.info(`BrowserService: \u6D4F\u89C8\u5668\u8FDB\u7A0B PID: ${trackedBrowserPid}`);
+              logger_default.info(`BrowserService: browser process PID: ${trackedBrowserPid}`);
             }
           } catch {
           }
           this.browser.on("disconnected", () => {
             const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1e3) : 0;
-            logger_default.warn(`BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5 (\u8FD0\u884C\u65F6\u957F: ${uptime}s, \u6D3B\u8DC3\u4F1A\u8BDD: ${this.sessions.size})`);
+            logger_default.warn(`BrowserService: browser disconnected (uptime: ${uptime}s, active sessions: ${this.sessions.size})`);
             this.browser = null;
             this.sessions.clear();
             trackedBrowserPid = null;
@@ -1230,23 +1226,23 @@ var BrowserService = class {
           this.browserStartCount++;
           this.browserStartTime = Date.now();
           const memAfter = getSystemMemoryInfo();
-          logger_default.info(`BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F (attempt ${attempt}, \u7B2C ${this.browserStartCount} \u6B21\u542F\u52A8, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          logger_default.info(`BrowserService: Chromium launched successfully (attempt ${attempt}, start #${this.browserStartCount}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
           this.recordBrowserSuccess();
           this.startHealthCheck();
           return this.browser;
         } catch (err) {
           lastError = err;
           const memErr = getSystemMemoryInfo();
-          logger_default.error(`BrowserService: \u542F\u52A8\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
+          logger_default.error(`BrowserService: launch failed (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
           if (attempt < maxAttempts) {
             const backoffMs = 5e3 * attempt;
-            logger_default.info(`BrowserService: \u7B49\u5F85 ${backoffMs / 1e3}s \u540E\u91CD\u8BD5...`);
+            logger_default.info(`BrowserService: retrying in ${backoffMs / 1e3}s...`);
             await new Promise((r) => setTimeout(r, backoffMs));
           }
         }
       }
       this.recordBrowserFailure();
-      throw lastError || new Error("\u6D4F\u89C8\u5668\u542F\u52A8\u5931\u8D25");
+      throw lastError || new Error("browser launch failed");
     })().finally(() => {
       this.launching = null;
     });
@@ -1260,7 +1256,7 @@ var BrowserService = class {
       var _a;
       try {
         if (!((_a = this.browser) == null ? void 0 : _a.isConnected())) {
-          logger_default.warn("BrowserService: \u5065\u5EB7\u68C0\u67E5\u53D1\u73B0\u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\uFF0C\u542F\u52A8\u4E3B\u52A8\u91CD\u8FDE...");
+          logger_default.warn("BrowserService: health check: browser disconnected, triggering reconnect...");
           this.browser = null;
           this.sessions.clear();
           this.stopHealthCheck();
@@ -1270,18 +1266,18 @@ var BrowserService = class {
         const memInfo = getSystemMemoryInfo();
         if (memInfo.freeMB < 200 && this.sessions.size > 0) {
           const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
-          logger_default.warn(`BrowserService: \u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB free)\uFF0C\u6E05\u7406 ${evictCount} \u4E2A\u4F1A\u8BDD...`);
+          logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB free), evicting ${evictCount} session(s)...`);
           await this.evictOldestSessions(evictCount);
         }
         const now = Date.now();
         for (const [token, session] of this.sessions) {
           if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
-            logger_default.info(`BrowserService: \u5065\u5EB7\u68C0\u67E5\u6E05\u7406\u8FC7\u671F\u4F1A\u8BDD ${token.substring(0, 8)}...`);
+            logger_default.info(`BrowserService: health check: closing idle session ${token.substring(0, 8)}...`);
             await this.closeSession(token);
           }
         }
       } catch (err) {
-        logger_default.error(`BrowserService: \u5065\u5EB7\u68C0\u67E5\u5F02\u5E38: ${err.message}`);
+        logger_default.error(`BrowserService: health check error: ${err.message}`);
       }
     }, HEALTH_CHECK_INTERVAL);
     if (this.healthCheckTimer.unref) {
@@ -1300,7 +1296,7 @@ var BrowserService = class {
     );
     for (let i = 0; i < Math.min(count, sorted.length); i++) {
       const [token] = sorted[i];
-      logger_default.info(`BrowserService: \u9A71\u9010\u6700\u65E7\u4F1A\u8BDD ${token.substring(0, 8)}...`);
+      logger_default.info(`BrowserService: evicting oldest session ${token.substring(0, 8)}...`);
       await this.closeSession(token);
     }
   }
@@ -1318,12 +1314,12 @@ var BrowserService = class {
         }
       } catch {
       }
-      logger_default.info(`BrowserService: \u4F1A\u8BDD ${token.substring(0, 8)}... \u5DF2\u5931\u6548\uFF0C\u91CD\u65B0\u521B\u5EFA`);
+      logger_default.info(`BrowserService: session ${token.substring(0, 8)}... is stale, recreating`);
       this.sessions.delete(token);
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
     if (this.sessions.size >= MAX_SESSIONS) {
-      logger_default.warn(`BrowserService: \u4F1A\u8BDD\u6570\u8FBE\u5230\u4E0A\u9650 (${MAX_SESSIONS})\uFF0C\u9A71\u9010\u6700\u65E7\u4F1A\u8BDD...`);
+      logger_default.warn(`BrowserService: session limit reached (${MAX_SESSIONS}), evicting oldest...`);
       await this.evictOldestSessions(1);
     }
     return this.createSession(token);
@@ -1334,9 +1330,9 @@ var BrowserService = class {
       try {
         const browser = await this.ensureBrowser();
         const memInfo = getSystemMemoryInfo();
-        logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... \u521B\u5EFA\u65B0\u4F1A\u8BDD (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
+        logger_default.info(`BrowserService: creating session for token ${token.substring(0, 8)}... (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
         if (memInfo.freeMB < 150 && this.sessions.size > 0) {
-          logger_default.warn(`BrowserService: \u53EF\u7528\u5185\u5B58\u4E0D\u8DB3 (${memInfo.freeMB}MB)\uFF0C\u9010\u6B65\u6E05\u7406\u4F1A\u8BDD...`);
+          logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, progressively evicting sessions...`);
           while (this.sessions.size > 0) {
             await this.evictOldestSessions(1);
             const updated = getSystemMemoryInfo();
@@ -1369,12 +1365,12 @@ var BrowserService = class {
           return route.continue();
         });
         const page = await context.newPage();
-        logger_default.info("BrowserService: \u6B63\u5728\u5BFC\u822A\u5230 jimeng.jianying.com ...");
+        logger_default.info("BrowserService: navigating to jimeng.jianying.com...");
         await page.goto("https://jimeng.jianying.com", {
           waitUntil: "domcontentloaded",
           timeout: 45e3
         });
-        logger_default.info("BrowserService: \u7B49\u5F85 bdms SDK \u5C31\u7EEA...");
+        logger_default.info("BrowserService: waiting for bdms SDK...");
         try {
           await page.waitForFunction(
             () => {
@@ -1383,10 +1379,10 @@ var BrowserService = class {
             },
             { timeout: BDMS_READY_TIMEOUT }
           );
-          logger_default.info("BrowserService: bdms SDK \u5DF2\u5C31\u7EEA");
+          logger_default.info("BrowserService: bdms SDK is ready");
         } catch (err) {
           logger_default.warn(
-            "BrowserService: bdms SDK \u7B49\u5F85\u8D85\u65F6\uFF0C\u53EF\u80FD\u672A\u5B8C\u5168\u52A0\u8F7D\uFF0C\u7EE7\u7EED\u5C1D\u8BD5..."
+            "BrowserService: bdms SDK wait timed out, may not be fully loaded, continuing..."
           );
         }
         const session = {
@@ -1398,7 +1394,7 @@ var BrowserService = class {
         this.sessions.set(token, session);
         return session;
       } catch (err) {
-        logger_default.error(`BrowserService: \u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25 (attempt ${attempt}/${maxAttempts}): ${err.message}`);
+        logger_default.error(`BrowserService: session creation failed (attempt ${attempt}/${maxAttempts}): ${err.message}`);
         this.browser = null;
         this.sessions.clear();
         if (attempt >= maxAttempts) {
@@ -1409,12 +1405,12 @@ var BrowserService = class {
       }
     }
     this.recordBrowserFailure();
-    throw new Error("\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25");
+    throw new Error("session creation failed");
   }
   async closeSession(token) {
     const session = this.sessions.get(token);
     if (!session) return;
-    logger_default.info(`BrowserService: \u5173\u95ED\u7A7A\u95F2\u4F1A\u8BDD ${token.substring(0, 8)}...`);
+    logger_default.info(`BrowserService: closing idle session ${token.substring(0, 8)}...`);
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
     }
@@ -1427,7 +1423,7 @@ var BrowserService = class {
   async fetch(token, url, options) {
     if (this.isApiCircuitOpen()) {
       const remaining = Math.round((API_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.apiLastFailureTime)) / 1e3);
-      const error = new Error(`BrowserService: \u8BF7\u6C42\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7 ${remaining}s \u540E\u91CD\u8BD5`);
+      const error = new Error(`BrowserService: requests temporarily unavailable, retry in ${remaining}s`);
       error.statusCode = 503;
       error.retryAfter = remaining;
       throw error;
@@ -1435,14 +1431,14 @@ var BrowserService = class {
     const totalStart = Date.now();
     let session;
     try {
-      logger_default.info(`BrowserService: \u83B7\u53D6\u4F1A\u8BDD\u4E2D...`);
+      logger_default.info(`BrowserService: acquiring session...`);
       session = await this.getSession(token);
       const sessionElapsed = Date.now() - totalStart;
-      logger_default.info(`BrowserService: \u4F1A\u8BDD\u5C31\u7EEA (${sessionElapsed}ms)`);
+      logger_default.info(`BrowserService: session ready (${sessionElapsed}ms)`);
     } catch (err) {
       const elapsed = Date.now() - totalStart;
-      logger_default.error(`BrowserService: \u4F1A\u8BDD\u83B7\u53D6\u5931\u8D25 (${elapsed}ms): ${err.message}`);
-      const error = new Error(`BrowserService: \u4F1A\u8BDD\u83B7\u53D6\u5931\u8D25: ${err.message}`);
+      logger_default.error(`BrowserService: session acquisition failed (${elapsed}ms): ${err.message}`);
+      const error = new Error(`BrowserService: session acquisition failed: ${err.message}`);
       error.statusCode = 503;
       error.retryAfter = 10;
       throw error;
@@ -1455,7 +1451,7 @@ var BrowserService = class {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         cancelToken.cancelled = true;
-        reject(new Error(`BrowserService: \u8BF7\u6C42\u8D85\u65F6 (${FETCH_TIMEOUT / 1e3}s)`));
+        reject(new Error(`BrowserService: request timed out (${FETCH_TIMEOUT / 1e3}s)`));
       }, FETCH_TIMEOUT);
     });
     try {
@@ -1464,16 +1460,16 @@ var BrowserService = class {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
       const totalElapsed = Date.now() - totalStart;
-      logger_default.info(`BrowserService: \u8BF7\u6C42\u5B8C\u6210 (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
+      logger_default.info(`BrowserService: request completed (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
       this.recordApiSuccess();
       return result;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
       const totalElapsed = Date.now() - totalStart;
-      logger_default.error(`BrowserService: \u8BF7\u6C42\u5931\u8D25 (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${err.message}`);
+      logger_default.error(`BrowserService: request failed (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${err.message}`);
       if (timedOut) {
-        logger_default.warn(`BrowserService: \u8D85\u65F6\uFF0C\u5173\u95ED\u4F1A\u8BDD\u4EE5\u4E2D\u6B62\u4EFB\u4F55\u8FDB\u884C\u4E2D\u7684\u8BF7\u6C42 ${token.substring(0, 8)}...`);
+        logger_default.warn(`BrowserService: timed out, closing session ${token.substring(0, 8)}...`);
         this.closeSession(token).catch(() => {
         });
       }
@@ -1489,10 +1485,10 @@ var BrowserService = class {
   }
   async _doFetch(token, session, url, options, cancelToken) {
     if (cancelToken.cancelled) {
-      logger_default.warn(`BrowserService: \u8BF7\u6C42\u5DF2\u53D6\u6D88\uFF0C\u8DF3\u8FC7\u53D1\u9001\u5230 Jimeng`);
-      throw new Error("BrowserService: \u8BF7\u6C42\u5DF2\u88AB\u53D6\u6D88");
+      logger_default.warn(`BrowserService: request cancelled, skipping (already timed out)`);
+      throw new Error("BrowserService: request was cancelled");
     }
-    logger_default.info(`BrowserService: \u4EE3\u7406\u8BF7\u6C42 ${options.method || "GET"} ${url.substring(0, 100)}...`);
+    logger_default.info(`BrowserService: proxying ${options.method || "GET"} ${url.substring(0, 100)}...`);
     try {
       const result = await session.page.evaluate(
         async ({ url: url2, options: options2, timeoutMs }) => {
@@ -1519,17 +1515,17 @@ var BrowserService = class {
         { url, options, timeoutMs: FETCH_TIMEOUT - 2e3 }
       );
       if (result.error) {
-        throw new Error(`\u6D4F\u89C8\u5668 fetch \u5931\u8D25: ${result.error}`);
+        throw new Error(`browser fetch error: ${result.error}`);
       }
-      logger_default.info(`BrowserService: \u54CD\u5E94\u72B6\u6001 ${result.status}`);
+      logger_default.info(`BrowserService: response status ${result.status}`);
       try {
         return JSON.parse(result.text);
       } catch {
-        logger_default.warn(`BrowserService: \u54CD\u5E94\u4E0D\u662F\u6709\u6548 JSON: ${result.text.substring(0, 200)}`);
+        logger_default.warn(`BrowserService: response is not valid JSON: ${result.text.substring(0, 200)}`);
         return result.text;
       }
     } catch (err) {
-      logger_default.error(`BrowserService: \u8BF7\u6C42\u6267\u884C\u5931\u8D25: ${err.message}`);
+      logger_default.error(`BrowserService: request execution failed: ${err.message}`);
       await this.closeSession(token);
       throw err;
     }
@@ -1538,15 +1534,15 @@ var BrowserService = class {
     if (this.isReady() || this.launching) {
       return;
     }
-    logger_default.info(`BrowserService: \u9884\u70ED\u6D4F\u89C8\u5668...`);
+    logger_default.info(`BrowserService: warming up browser...`);
     this.ensureBrowser().then(() => {
-      logger_default.info(`BrowserService: \u9884\u70ED\u5B8C\u6210\uFF0C\u6D4F\u89C8\u5668\u5DF2\u5C31\u7EEA`);
+      logger_default.info(`BrowserService: warm-up complete, browser ready`);
     }).catch((err) => {
-      logger_default.warn(`BrowserService: \u9884\u70ED\u5931\u8D25: ${err.message}\uFF0C\u5C06\u5728\u9996\u6B21\u8BF7\u6C42\u65F6\u91CD\u8BD5`);
+      logger_default.warn(`BrowserService: warm-up failed: ${err.message}, will retry on first request`);
     });
   }
   async close() {
-    logger_default.info("BrowserService: \u6B63\u5728\u5173\u95ED\u6240\u6709\u4F1A\u8BDD\u548C\u6D4F\u89C8\u5668...");
+    logger_default.info("BrowserService: shutting down all sessions and browser...");
     this.stopHealthCheck();
     for (const [token] of this.sessions) {
       await this.closeSession(token);
@@ -1559,7 +1555,7 @@ var BrowserService = class {
       this.browser = null;
     }
     killTrackedBrowserProcess();
-    logger_default.info("BrowserService: \u5DF2\u5173\u95ED");
+    logger_default.info("BrowserService: closed");
   }
 };
 var browserService = new BrowserService();
@@ -1823,7 +1819,7 @@ var Server = class {
         return;
       }
       if (ctx.is("application/json") && ["POST", "PUT", "PATCH"].includes(ctx.method)) {
-        logger_default.debug("\u5F00\u59CB\u81EA\u5B9A\u4E49 JSON \u89E3\u6790");
+        logger_default.debug("Starting custom JSON parse");
         const chunks = [];
         await new Promise((resolve, reject) => {
           ctx.req.on("data", (chunk) => {
@@ -1837,7 +1833,7 @@ var Server = class {
         const body = Buffer.concat(chunks).toString("utf8");
         let cleanedBody = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\u00A0/g, " ").replace(/[\u2000-\u200B]/g, " ").replace(/\uFEFF/g, "").trim();
         const parsedBody = JSON.parse(cleanedBody);
-        logger_default.debug("JSON \u89E3\u6790\u6210\u529F\uFF0C\u8DF3\u8FC7 koa-body");
+        logger_default.debug("Custom JSON parse successful, skipping koa-body");
         ctx.request.body = parsedBody;
         ctx.request.rawBody = cleanedBody;
         ctx._jsonProcessed = true;
@@ -1885,7 +1881,7 @@ var Server = class {
     this.app.use((ctx) => {
       const request2 = new Request(ctx);
       logger_default.debug(`-> ${ctx.request.method} ${ctx.request.url} request is not supported - ${request2.remoteIP || "unknown"}`);
-      const message = `[\u8BF7\u6C42\u6709\u8BEF]: \u6B63\u786E\u8BF7\u6C42\u4E3A POST -> /v1/chat/completions\uFF0C\u5F53\u524D\u8BF7\u6C42\u4E3A ${ctx.request.method} -> ${ctx.request.url} \u8BF7\u7EA0\u6B63`;
+      const message = `[Bad Request]: Expected POST -> /v1/chat/completions, got ${ctx.request.method} -> ${ctx.request.url}`;
       logger_default.warn(message);
       const failureBody = new FailureBody(new Error(message));
       const response = new Response(failureBody);
@@ -3912,7 +3908,7 @@ var MODEL_MAP2 = {
   "jimeng-video-3.0": "dreamina_ic_generate_video_model_vgfm_3.0",
   "jimeng-video-2.0": "dreamina_ic_generate_video_model_vgfm_lite",
   "jimeng-video-2.0-pro": "dreamina_ic_generate_video_model_vgfm1.0",
-  // Seedance 多图智能视频生成模型（jimeng-video-seedance-2.0 为上游标准名称）
+  // Seedance 多图智能video生成模型（jimeng-video-seedance-2.0 为上游标准名称）
   "jimeng-video-seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0-pro": "dreamina_seedance_40_pro",
@@ -4013,12 +4009,12 @@ function resolveVideoResolution(resolution = "720p", ratio = "1:1") {
   const resolutionGroup = VIDEO_RESOLUTION_OPTIONS[resolution];
   if (!resolutionGroup) {
     const supportedResolutions = Object.keys(VIDEO_RESOLUTION_OPTIONS).join(", ");
-    throw new Error(`\u4E0D\u652F\u6301\u7684\u89C6\u9891\u5206\u8FA8\u7387 "${resolution}"\u3002\u652F\u6301\u7684\u5206\u8FA8\u7387: ${supportedResolutions}`);
+    throw new Error(`Unsupported video resolution "${resolution}". Supported resolutions: ${supportedResolutions}`);
   }
   const ratioConfig = resolutionGroup[ratio];
   if (!ratioConfig) {
     const supportedRatios = Object.keys(resolutionGroup).join(", ");
-    throw new Error(`\u5728 "${resolution}" \u5206\u8FA8\u7387\u4E0B\uFF0C\u4E0D\u652F\u6301\u7684\u6BD4\u4F8B "${ratio}"\u3002\u652F\u6301\u7684\u6BD4\u4F8B: ${supportedRatios}`);
+    throw new Error(`Unsupported ratio "${ratio}" for resolution "${resolution}". Supported ratios: ${supportedRatios}`);
   }
   return {
     width: ratioConfig.width,
@@ -4102,7 +4098,7 @@ function calculateCRC322(buffer) {
 async function uploadImageForVideo(imageUrl, refreshToken) {
   var _a, _b, _c, _d, _e, _f;
   try {
-    logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u89C6\u9891\u56FE\u7247: ${imageUrl}`);
+    logger_default.info(`Uploading image: ${imageUrl}`);
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2
@@ -4111,18 +4107,18 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25");
+      throw new Error("Failed to get upload token");
     }
     const actualServiceId = service_id || "tb4s082cfz";
-    logger_default.info(`\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: service_id=${actualServiceId}`);
+    logger_default.info(`Upload token obtained: service_id=${actualServiceId}`);
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
-      throw new Error(`\u4E0B\u8F7D\u56FE\u7247\u5931\u8D25: ${imageResponse.status}`);
+      throw new Error(`Image download failed: ${imageResponse.status}`);
     }
     const imageBuffer = await imageResponse.arrayBuffer();
     const fileSize = imageBuffer.byteLength;
     const crc32 = calculateCRC322(imageBuffer);
-    logger_default.info(`\u56FE\u7247\u4E0B\u8F7D\u5B8C\u6210: \u5927\u5C0F=${fileSize}\u5B57\u8282, CRC32=${crc32}`);
+    logger_default.info(`Image downloaded: size=${fileSize} bytes, CRC32=${crc32}`);
     const now = /* @__PURE__ */ new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const randomStr = Math.random().toString(36).substring(2, 12);
@@ -4132,7 +4128,7 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
       "x-amz-security-token": session_token
     };
     const authorization = createSignature2("GET", applyUrl, requestHeaders, access_key_id, secret_access_key, session_token);
-    logger_default.info(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650: ${applyUrl}`);
+    logger_default.info(`Requesting upload auth: ${applyUrl}`);
     const applyResponse = await fetch(applyUrl, {
       method: "GET",
       headers: {
@@ -4154,23 +4150,23 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
     }
     const applyResult = await applyResponse.json();
     if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
-    logger_default.info(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u6210\u529F`);
+    logger_default.info(`Upload auth granted`);
     const uploadAddress = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`\u83B7\u53D6\u4E0A\u4F20\u5730\u5740\u5931\u8D25: ${JSON.stringify(applyResult)}`);
+      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
     }
     const storeInfo = uploadAddress.StoreInfos[0];
     const uploadHost = uploadAddress.UploadHosts[0];
     const auth = storeInfo.Auth;
     const uploadUrl = `https://${uploadHost}/upload/v1/${storeInfo.StoreUri}`;
     const imageId = storeInfo.StoreUri.split("/").pop();
-    logger_default.info(`\u51C6\u5907\u4E0A\u4F20\u56FE\u7247: imageId=${imageId}, uploadUrl=${uploadUrl}`);
+    logger_default.info(`Uploading image: imageId=${imageId}, url=${uploadUrl}`);
     const uploadResponse = await fetch(uploadUrl, {
       method: "POST",
       headers: {
@@ -4193,9 +4189,9 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
     }
-    logger_default.info(`\u56FE\u7247\u6587\u4EF6\u4E0A\u4F20\u6210\u529F`);
+    logger_default.info(`Image file uploaded successfully`);
     const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
     const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const commitPayload = JSON.stringify({
@@ -4233,36 +4229,36 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
     }
     const commitResult = await commitResponse.json();
     if ((_c = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _c.Error) {
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
     if (!((_d = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _d.Results) || commitResult.Result.Results.length === 0) {
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
+      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
     }
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2e3) {
-      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u72B6\u6001\u5F02\u5E38: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
     }
     const fullImageUri = uploadResult.Uri;
     const pluginResult = (_f = (_e = commitResult.Result) == null ? void 0 : _e.PluginResult) == null ? void 0 : _f[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger_default.info(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${pluginResult.ImageUri}`);
+      logger_default.info(`Image upload complete: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
-    logger_default.info(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${fullImageUri}`);
+    logger_default.info(`Image upload complete: ${fullImageUri}`);
     return fullImageUri;
   } catch (error) {
-    logger_default.error(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+    logger_default.error(`Image upload failed: ${error.message}`);
     throw error;
   }
 }
 async function uploadImageBufferForVideo(buffer, refreshToken) {
   var _a, _b, _c, _d, _e, _f;
   try {
-    logger_default.info(`\u5F00\u59CB\u4ECEBuffer\u4E0A\u4F20\u89C6\u9891\u56FE\u7247\uFF0C\u5927\u5C0F: ${buffer.length}\u5B57\u8282`);
+    logger_default.info(`Uploading image from buffer, size: ${buffer.length} bytes`);
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2
@@ -4270,13 +4266,13 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25");
+      throw new Error("Failed to get upload token");
     }
     const actualServiceId = service_id || "tb4s082cfz";
-    logger_default.info(`\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: service_id=${actualServiceId}`);
+    logger_default.info(`Upload token obtained: service_id=${actualServiceId}`);
     const fileSize = buffer.length;
     const crc32 = calculateCRC322(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-    logger_default.info(`Buffer\u5927\u5C0F: ${fileSize}\u5B57\u8282, CRC32=${crc32}`);
+    logger_default.info(`Buffer size: ${fileSize} bytes, CRC32=${crc32}`);
     const now = /* @__PURE__ */ new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const randomStr = Math.random().toString(36).substring(2, 12);
@@ -4301,15 +4297,15 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
     }
     const applyResult = await applyResponse.json();
     if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
     const uploadAddress = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`\u83B7\u53D6\u4E0A\u4F20\u5730\u5740\u5931\u8D25: ${JSON.stringify(applyResult)}`);
+      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
     }
     const storeInfo = uploadAddress.StoreInfos[0];
     const uploadHost = uploadAddress.UploadHosts[0];
@@ -4331,9 +4327,9 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
     }
-    logger_default.info(`Buffer\u56FE\u7247\u6587\u4EF6\u4E0A\u4F20\u6210\u529F`);
+    logger_default.info(`BufferImage file uploaded successfully`);
     const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
     const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const commitPayload = JSON.stringify({
@@ -4364,29 +4360,29 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
     }
     const commitResult = await commitResponse.json();
     if ((_c = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _c.Error) {
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
     if (!((_d = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _d.Results) || commitResult.Result.Results.length === 0) {
-      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
+      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
     }
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2e3) {
-      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u72B6\u6001\u5F02\u5E38: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
     }
     const fullImageUri = uploadResult.Uri;
     const pluginResult = (_f = (_e = commitResult.Result) == null ? void 0 : _e.PluginResult) == null ? void 0 : _f[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger_default.info(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${pluginResult.ImageUri}`);
+      logger_default.info(`BufferImage upload complete: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
-    logger_default.info(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${fullImageUri}`);
+    logger_default.info(`BufferImage upload complete: ${fullImageUri}`);
     return fullImageUri;
   } catch (error) {
-    logger_default.error(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+    logger_default.error(`BufferImage upload failed: ${error.message}`);
     throw error;
   }
 }
@@ -4414,18 +4410,18 @@ function parseAudioDuration(buffer) {
 }
 async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   var _a, _b, _c, _d, _e, _f, _g;
-  const label = mediaType === "audio" ? "\u97F3\u9891" : "\u89C6\u9891";
+  const label = mediaType === "audio" ? "audio" : "video";
   const fileSize = buffer.length;
-  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6\uFF0C\u5927\u5C0F: ${fileSize} \u5B57\u8282`);
+  logger_default.info(`Uploading ${label}file, size: ${fileSize} bytes`);
   const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
     data: { scene: 1 }
   });
   const { access_key_id, secret_access_key, session_token, space_name } = tokenResult;
   if (!access_key_id || !secret_access_key || !session_token) {
-    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25`);
+    throw new Error(`Failed to get ${label} upload token`);
   }
   const spaceName = space_name || "dreamina";
-  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: spaceName=${spaceName}`);
+  logger_default.info(`Getting ${label} upload token: spaceName=${spaceName}`);
   const now = /* @__PURE__ */ new Date();
   const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
   const randomStr = Math.random().toString(36).substring(2, 12);
@@ -4446,7 +4442,7 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
     "cn-north-1",
     "vod"
   );
-  logger_default.info(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650: ${applyUrl}`);
+  logger_default.info(`Requesting ${label} upload auth: ${applyUrl}`);
   const applyResponse = await fetch(applyUrl, {
     method: "GET",
     headers: {
@@ -4462,30 +4458,30 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   });
   if (!applyResponse.ok) {
     const errorText = await applyResponse.text();
-    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
+    throw new Error(`${label} upload auth request failed: ${applyResponse.status} - ${errorText}`);
   }
   const applyResult = await applyResponse.json();
   if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+    throw new Error(`${label} upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
   }
   const uploadNodes = (_c = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.InnerUploadAddress) == null ? void 0 : _c.UploadNodes;
   if (!uploadNodes || uploadNodes.length === 0) {
-    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u5931\u8D25: ${JSON.stringify(applyResult)}`);
+    throw new Error(`Failed to get ${label} upload endpoint: ${JSON.stringify(applyResult)}`);
   }
   const uploadNode = uploadNodes[0];
   const storeInfo = (_d = uploadNode.StoreInfos) == null ? void 0 : _d[0];
   if (!storeInfo) {
-    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u5B58\u50A8\u4FE1\u606F\u5931\u8D25: ${JSON.stringify(uploadNode)}`);
+    throw new Error(`Failed to get ${label} upload storage info: ${JSON.stringify(uploadNode)}`);
   }
   const uploadHost = uploadNode.UploadHost;
   const storeUri = storeInfo.StoreUri;
   const auth = storeInfo.Auth;
   const sessionKey = uploadNode.SessionKey;
   const vid = uploadNode.Vid;
-  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u6210\u529F: host=${uploadHost}, vid=${vid}`);
+  logger_default.info(`Getting ${label} upload endpoint: host=${uploadHost}, vid=${vid}`);
   const uploadUrl = `https://${uploadHost}/upload/v1/${storeUri}`;
   const crc32 = calculateCRC322(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6: ${uploadUrl}, CRC32=${crc32}`);
+  logger_default.info(`Uploading ${label}file: ${uploadUrl}, CRC32=${crc32}`);
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
     headers: {
@@ -4501,13 +4497,13 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   });
   if (!uploadResponse.ok) {
     const errorText = await uploadResponse.text();
-    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
+    throw new Error(`${label} file upload failed: ${uploadResponse.status} - ${errorText}`);
   }
   const uploadData = await uploadResponse.json();
   if ((uploadData == null ? void 0 : uploadData.code) !== 2e3) {
-    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: code=${uploadData == null ? void 0 : uploadData.code}, message=${uploadData == null ? void 0 : uploadData.message}`);
+    throw new Error(`${label} file upload failed: code=${uploadData == null ? void 0 : uploadData.code}, message=${uploadData == null ? void 0 : uploadData.message}`);
   }
-  logger_default.info(`${label}\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: crc32=${(_e = uploadData.data) == null ? void 0 : _e.crc32}`);
+  logger_default.info(`${label}file uploaded, crc32=${(_e = uploadData.data) == null ? void 0 : _e.crc32}`);
   const commitUrl = `${vodHost}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${spaceName}`;
   const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
   const commitPayload = JSON.stringify({
@@ -4531,7 +4527,7 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
     "cn-north-1",
     "vod"
   );
-  logger_default.info(`\u63D0\u4EA4${label}\u4E0A\u4F20\u786E\u8BA4: ${commitUrl}`);
+  logger_default.info(`Committing ${label} upload: ${commitUrl}`);
   const commitResponse = await fetch(commitUrl, {
     method: "POST",
     headers: {
@@ -4549,26 +4545,26 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   });
   if (!commitResponse.ok) {
     const errorText = await commitResponse.text();
-    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
+    throw new Error(`${label} upload commit failed: ${commitResponse.status} - ${errorText}`);
   }
   const commitResult = await commitResponse.json();
   if ((_f = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _f.Error) {
-    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+    throw new Error(`${label} upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
   }
   if (!((_g = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _g.Results) || commitResult.Result.Results.length === 0) {
-    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
+    throw new Error(`${label} upload commit response missing result: ${JSON.stringify(commitResult)}`);
   }
   const result = commitResult.Result.Results[0];
   if (!result.Vid) {
-    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11 Vid: ${JSON.stringify(result)}`);
+    throw new Error(`${label} upload commit response missing Vid: ${JSON.stringify(result)}`);
   }
   const videoMeta = result.VideoMeta || {};
   let duration = videoMeta.Duration ? Math.round(videoMeta.Duration * 1e3) : 0;
   if (duration <= 0 && mediaType === "audio") {
     duration = parseAudioDuration(buffer);
-    logger_default.info(`VOD \u672A\u8FD4\u56DE${label}\u65F6\u957F\uFF0C\u672C\u5730\u89E3\u6790: ${duration}ms`);
+    logger_default.info(`VOD did not return ${label} duration, parsed locally: ${duration}ms`);
   }
-  logger_default.info(`${label}\u4E0A\u4F20\u5B8C\u6210: vid=${result.Vid}, duration=${duration}ms`);
+  logger_default.info(`${label} upload complete: vid=${result.Vid}, duration=${duration}ms`);
   return {
     vid: result.Vid,
     width: videoMeta.Width || 0,
@@ -4580,7 +4576,7 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
 async function fetchHighQualityVideoUrl(itemId, refreshToken) {
   var _a, _b, _c, _d, _e, _f;
   try {
-    logger_default.info(`\u5C1D\u8BD5\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891\u4E0B\u8F7DURL\uFF0Citem_id: ${itemId}`);
+    logger_default.info(`Fetching HQ video download URL, item_id: ${itemId}`);
     const result = await request("post", "/mweb/v1/get_local_item_list", refreshToken, {
       data: {
         item_id_list: [itemId],
@@ -4592,35 +4588,35 @@ async function fetchHighQualityVideoUrl(itemId, refreshToken) {
       }
     });
     const responseStr = JSON.stringify(result);
-    logger_default.info(`get_local_item_list \u54CD\u5E94\u5927\u5C0F: ${responseStr.length} \u5B57\u7B26`);
+    logger_default.info(`get_local_item_list response size: ${responseStr.length} chars`);
     const itemList = result.item_list || result.local_item_list || [];
     if (itemList.length > 0) {
       const item = itemList[0];
       const videoUrl = ((_c = (_b = (_a = item == null ? void 0 : item.video) == null ? void 0 : _a.transcoded_video) == null ? void 0 : _b.origin) == null ? void 0 : _c.video_url) || ((_d = item == null ? void 0 : item.video) == null ? void 0 : _d.download_url) || ((_e = item == null ? void 0 : item.video) == null ? void 0 : _e.play_url) || ((_f = item == null ? void 0 : item.video) == null ? void 0 : _f.url);
       if (videoUrl) {
-        logger_default.info(`\u4ECEget_local_item_list\u7ED3\u6784\u5316\u5B57\u6BB5\u83B7\u53D6\u5230\u9AD8\u6E05\u89C6\u9891URL: ${videoUrl}`);
+        logger_default.info(`Found HQ video URL from structured field: ${videoUrl}`);
         return videoUrl;
       }
     }
     const hqUrlMatch = responseStr.match(/https:\/\/v[0-9]+-dreamnia\.jimeng\.com\/[^"\s\\]+/);
     if (hqUrlMatch && hqUrlMatch[0]) {
-      logger_default.info(`\u6B63\u5219\u63D0\u53D6\u5230\u9AD8\u8D28\u91CF\u89C6\u9891URL (dreamnia): ${hqUrlMatch[0]}`);
+      logger_default.info(`Regex matched HQ video URL (dreamnia): ${hqUrlMatch[0]}`);
       return hqUrlMatch[0];
     }
     const jimengUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.jimeng\.com\/[^"\s\\]+/);
     if (jimengUrlMatch && jimengUrlMatch[0]) {
-      logger_default.info(`\u6B63\u5219\u63D0\u53D6\u5230jimeng\u89C6\u9891URL: ${jimengUrlMatch[0]}`);
+      logger_default.info(`Regex matched jimeng video URL: ${jimengUrlMatch[0]}`);
       return jimengUrlMatch[0];
     }
     const anyVideoUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.(vlabvod|jimeng)\.com\/[^"\s\\]+/);
     if (anyVideoUrlMatch && anyVideoUrlMatch[0]) {
-      logger_default.info(`\u4ECEget_local_item_list\u63D0\u53D6\u5230\u89C6\u9891URL: ${anyVideoUrlMatch[0]}`);
+      logger_default.info(`Extracted video URL from get_local_item_list: ${anyVideoUrlMatch[0]}`);
       return anyVideoUrlMatch[0];
     }
-    logger_default.warn(`\u672A\u80FD\u4ECEget_local_item_list\u54CD\u5E94\u4E2D\u63D0\u53D6\u5230\u89C6\u9891URL`);
+    logger_default.warn(`Could not extract video URL from get_local_item_list response`);
     return null;
   } catch (error) {
-    logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891\u4E0B\u8F7DURL\u5931\u8D25: ${error.message}`);
+    logger_default.warn(`Failed to fetch HQ video download URL: ${error.message}`);
     return null;
   }
 }
@@ -4664,7 +4660,7 @@ async function checkVideoJobStatus(historyId, refreshToken) {
     }
     const videoUrl = ((_k = (_j = (_i = (_h = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _h.video) == null ? void 0 : _i.transcoded_video) == null ? void 0 : _j.origin) == null ? void 0 : _k.video_url) || ((_m = (_l = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _l.video) == null ? void 0 : _m.play_url) || ((_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.video) == null ? void 0 : _o.download_url) || ((_q = (_p = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _p.video) == null ? void 0 : _q.url);
     if (videoUrl) return { status: "completed", url: videoUrl };
-    return { status: "failed", error: "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL" };
+    return { status: "failed", error: "\u672A\u80FDGetting videoURL" };
   } catch (err) {
     logger_default.error(`checkVideoJobStatus: API error for historyId=${historyId}: ${err.message}`);
     return { status: "processing" };
@@ -4679,7 +4675,7 @@ async function generateVideo(_model, prompt, {
 }, refreshToken, jobId) {
   const model = getModel2(_model);
   const { width, height } = resolveVideoResolution(resolution, ratio);
-  logger_default.info(`\u4F7F\u7528\u6A21\u578B: ${_model} \u6620\u5C04\u6A21\u578B: ${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F: ${duration}\u79D2`);
+  logger_default.info(`Model: ${_model} -> mapped: ${model} ${width}x${height} (${ratio}@${resolution}) duration: ${duration}s`);
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
@@ -4687,37 +4683,37 @@ async function generateVideo(_model, prompt, {
   let end_frame_image = void 0;
   if (files && files.length > 0) {
     let uploadIDs = [];
-    logger_default.info(`\u5F00\u59CB\u5904\u7406 ${files.length} \u4E2A\u4E0A\u4F20\u6587\u4EF6\u7528\u4E8E\u89C6\u9891\u751F\u6210`);
+    logger_default.info(`Processing ${files.length} uploaded file(s) for video generation`);
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger_default.warn(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u65E0\u6548\uFF0C\u8DF3\u8FC7`);
+        logger_default.warn(`File ${i + 1} is invalid, skipping`);
         continue;
       }
       try {
-        logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
+        logger_default.info(`Uploading file ${i + 1}: ${file.originalFilename || file.filepath}`);
         const buffer = fs8.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger_default.info(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+          logger_default.info(`File ${i + 1} uploaded: ${imageUri}`);
         } else {
-          logger_default.error(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: \u672A\u83B7\u53D6\u5230 image_uri`);
+          logger_default.error(`File ${i + 1} upload failed: no image_uri returned`);
         }
       } catch (error) {
-        logger_default.error(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+        logger_default.error(`File ${i + 1} upload failed: ${error.message}`);
         if (i === 0) {
-          logger_default.error(`\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          logger_default.error(`First-frame file upload failed, stopping to avoid wasting credits`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First-frame file upload failed: ${error.message}`);
         } else {
-          logger_default.warn(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u5C06\u8DF3\u8FC7\u6B64\u6587\u4EF6\u7EE7\u7EED\u5904\u7406`);
+          logger_default.warn(`File ${i + 1} upload failed, skipping and continuing`);
         }
       }
     }
-    logger_default.info(`\u6587\u4EF6\u4E0A\u4F20\u5B8C\u6210\uFF0C\u6210\u529F\u4E0A\u4F20 ${uploadIDs.length} \u4E2A\u6587\u4EF6`);
+    logger_default.info(`File uploads complete: ${uploadIDs.length} file(s)`);
     if (uploadIDs.length === 0) {
-      logger_default.error(`\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
-      throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u662F\u5426\u6709\u6548");
+      logger_default.error(`All file uploads failed, stopping to avoid wasting credits`);
+      throw new APIException(exceptions_default.API_REQUEST_FAILED, "All file uploads failed, please check that the files are valid");
     }
     if (uploadIDs[0]) {
       first_frame_image = {
@@ -4732,7 +4728,7 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[0],
         width
       };
-      logger_default.info(`\u8BBE\u7F6E\u9996\u5E27\u56FE\u7247: ${uploadIDs[0]}`);
+      logger_default.info(`Set first-frame image: ${uploadIDs[0]}`);
     }
     if (uploadIDs[1]) {
       end_frame_image = {
@@ -4747,40 +4743,40 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[1],
         width
       };
-      logger_default.info(`\u8BBE\u7F6E\u5C3E\u5E27\u56FE\u7247: ${uploadIDs[1]}`);
+      logger_default.info(`Set last-frame image: ${uploadIDs[1]}`);
     }
   } else if (filePaths && filePaths.length > 0) {
     let uploadIDs = [];
-    logger_default.info(`\u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u5F20\u56FE\u7247\u7528\u4E8E\u89C6\u9891\u751F\u6210`);
+    logger_default.info(`Uploading  ${filePaths.length} image(s) for video generation`);
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) {
-        logger_default.warn(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u8DEF\u5F84\u4E3A\u7A7A\uFF0C\u8DF3\u8FC7`);
+        logger_default.warn(`Image ${i + 1} path is empty, skipping`);
         continue;
       }
       try {
-        logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u5F20\u56FE\u7247: ${filePath}`);
+        logger_default.info(`Uploading image ${i + 1}: ${filePath}`);
         const imageUri = await uploadImageForVideo(filePath, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger_default.info(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+          logger_default.info(`Image ${i + 1} uploaded: ${imageUri}`);
         } else {
-          logger_default.error(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: \u672A\u83B7\u53D6\u5230 image_uri`);
+          logger_default.error(`Image ${i + 1} upload failed: no image_uri returned`);
         }
       } catch (error) {
-        logger_default.error(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+        logger_default.error(`Image ${i + 1} upload failed: ${error.message}`);
         if (i === 0) {
-          logger_default.error(`\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          logger_default.error(`First-frame image upload failed, stopping to avoid wasting credits`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First-frame image upload failed: ${error.message}`);
         } else {
-          logger_default.warn(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u5C06\u8DF3\u8FC7\u6B64\u56FE\u7247\u7EE7\u7EED\u5904\u7406`);
+          logger_default.warn(`Image ${i + 1} upload failed, skipping and continuing`);
         }
       }
     }
-    logger_default.info(`\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210\uFF0C\u6210\u529F\u4E0A\u4F20 ${uploadIDs.length} \u5F20\u56FE\u7247`);
+    logger_default.info(`Image uploads complete: ${uploadIDs.length} image(s)`);
     if (uploadIDs.length === 0) {
-      logger_default.error(`\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
-      throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u56FE\u7247URL\u662F\u5426\u6709\u6548");
+      logger_default.error(`All image uploads failed, stopping to avoid wasting credits`);
+      throw new APIException(exceptions_default.API_REQUEST_FAILED, "All image uploads failed, please check that the image URLs are valid");
     }
     if (uploadIDs[0]) {
       first_frame_image = {
@@ -4795,7 +4791,7 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[0],
         width
       };
-      logger_default.info(`\u8BBE\u7F6E\u9996\u5E27\u56FE\u7247: ${uploadIDs[0]}`);
+      logger_default.info(`Set first-frame image: ${uploadIDs[0]}`);
     }
     if (uploadIDs[1]) {
       end_frame_image = {
@@ -4810,12 +4806,12 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[1],
         width
       };
-      logger_default.info(`\u8BBE\u7F6E\u5C3E\u5E27\u56FE\u7247: ${uploadIDs[1]}`);
+      logger_default.info(`Set last-frame image: ${uploadIDs[1]}`);
     } else if (filePaths.length > 1) {
-      logger_default.warn(`\u7B2C\u4E8C\u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\u6216\u672A\u63D0\u4F9B\uFF0C\u5C06\u4EC5\u4F7F\u7528\u9996\u5E27\u56FE\u7247`);
+      logger_default.warn(`Second image upload failed or not provided, using first-frame only`);
     }
   } else {
-    logger_default.info(`\u672A\u63D0\u4F9B\u56FE\u7247\u6587\u4EF6\uFF0C\u5C06\u8FDB\u884C\u7EAF\u6587\u672C\u89C6\u9891\u751F\u6210`);
+    logger_default.info(`No image files provided, generating video from text only`);
   }
   const componentId = util_default.uuid();
   const metricsExtra = JSON.stringify({
@@ -4917,7 +4913,7 @@ async function generateVideo(_model, prompt, {
   );
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "History ID not found");
   logger_default.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
     status: "processing",
@@ -4938,28 +4934,28 @@ async function generateSeedanceVideo(_model, prompt, {
   const benefitType = SEEDANCE_BENEFIT_TYPE_MAP[_model] || "dreamina_video_seedance_20_pro";
   const actualDuration = duration || 4;
   const { width, height } = resolveVideoResolution(resolution, ratio);
-  logger_default.info(`Seedance 2.0 \u751F\u6210: \u6A21\u578B=${_model} \u6620\u5C04=${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F=${actualDuration}\u79D2`);
+  logger_default.info(`Seedance generation: model=${_model} -> mapped=${model} ${width}x${height} (${ratio}@${resolution}) duration=${actualDuration}s`);
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
   let uploadedMaterials = [];
   if (files && files.length > 0) {
-    logger_default.info(`Seedance: \u5F00\u59CB\u5904\u7406 ${files.length} \u4E2A\u4E0A\u4F20\u6587\u4EF6`);
+    logger_default.info(`Seedance: Processing ${files.length} uploaded file(s)`);
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger_default.warn(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u65E0\u6548\uFF0C\u8DF3\u8FC7`);
+        logger_default.warn(`Seedance: file ${i + 1} file(s) invalid, skipping`);
         continue;
       }
       const materialType = detectMaterialType(file);
       try {
-        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${file.originalFilename || file.filepath}`);
+        logger_default.info(`Seedance: uploading file ${i + 1} (${materialType}): ${file.originalFilename || file.filepath}`);
         const buffer = fs8.readFileSync(file.filepath);
         if (materialType === "image") {
           const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+            logger_default.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
           }
         } else {
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken, file.originalFilename);
@@ -4972,32 +4968,32 @@ async function generateSeedanceVideo(_model, prompt, {
             fps: vodResult.fps,
             name: file.originalFilename || ""
           });
-          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
+          logger_default.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+        logger_default.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
         }
       }
     }
   } else if (filePaths && filePaths.length > 0) {
-    logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u4E2A\u6587\u4EF6`);
+    logger_default.info(`Seedance: Uploading  ${filePaths.length} file(s)`);
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) continue;
       const materialType = detectMaterialTypeFromUrl(filePath);
       try {
-        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${filePath}`);
+        logger_default.info(`Seedance: uploading file ${i + 1} (${materialType}): ${filePath}`);
         if (materialType === "image") {
           const imageUri = await uploadImageForVideo(filePath, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
+            logger_default.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
           }
         } else {
           const response = await fetch(filePath);
-          if (!response.ok) throw new Error(`\u4E0B\u8F7D\u6587\u4EF6\u5931\u8D25: ${response.status}`);
+          if (!response.ok) throw new Error(`File download failed: ${response.status}`);
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken);
@@ -5009,20 +5005,20 @@ async function generateSeedanceVideo(_model, prompt, {
             duration: vodResult.duration,
             fps: vodResult.fps
           });
-          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
+          logger_default.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+        logger_default.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
         }
       }
     }
   }
   if (uploadedMaterials.length === 0) {
-    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 \u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u6587\u4EF6\uFF08\u56FE\u7247/\u89C6\u9891/\u97F3\u9891\uFF09");
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 requires at least one file (image/video/audio)");
   }
-  logger_default.info(`Seedance: \u6210\u529F\u4E0A\u4F20 ${uploadedMaterials.length} \u4E2A\u6587\u4EF6`);
+  logger_default.info(`Seedance: uploaded ${uploadedMaterials.length} file(s)`);
   const hasVideoMaterial = uploadedMaterials.some((m) => m.type === "video");
   const finalBenefitType = hasVideoMaterial ? `${benefitType}_with_video` : benefitType;
   const materialList = uploadedMaterials.map((mat) => {
@@ -5197,7 +5193,7 @@ async function generateSeedanceVideo(_model, prompt, {
       aid: DEFAULT_ASSISTANT_ID
     }
   };
-  logger_default.info(`Seedance: \u901A\u8FC7\u6D4F\u89C8\u5668\u4EE3\u7406\u53D1\u9001 generate \u8BF7\u6C42...`);
+  logger_default.info(`Seedance: sending generate request via browser proxy...`);
   await acquireBrowserSlot(token.substring(0, 8));
   let generateResult;
   try {
@@ -5216,14 +5212,14 @@ async function generateSeedanceVideo(_model, prompt, {
   const { ret, errmsg, data: generateData } = generateResult;
   if (ret !== void 0 && Number(ret) !== 0) {
     if (Number(ret) === 5e3) {
-      throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[\u65E0\u6CD5\u751F\u6210\u89C6\u9891]: \u5373\u68A6\u79EF\u5206\u53EF\u80FD\u4E0D\u8DB3\uFF0C${errmsg}`);
+      throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Video generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
     }
-    throw new APIException(exceptions_default.API_REQUEST_FAILED, `[\u8BF7\u6C42jimeng\u5931\u8D25]: ${errmsg}`);
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
   }
   const aigc_data = (generateData == null ? void 0 : generateData.aigc_data) || generateResult.aigc_data;
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "History ID not found");
   logger_default.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
   await updateJobInDb(jobId, {
     status: "processing",
@@ -5279,7 +5275,7 @@ function buildMetaListFromPrompt(prompt, materials) {
     if (prompt && prompt.trim()) {
       metaList.push({ meta_type: "text", text: `\u7D20\u6750\uFF0C${prompt}` });
     } else {
-      metaList.push({ meta_type: "text", text: "\u7D20\u6750\u751F\u6210\u89C6\u9891" });
+      metaList.push({ meta_type: "text", text: "\u7D20\u6750\u751F\u6210video" });
     }
   }
   return metaList;
@@ -6117,7 +6113,7 @@ async function reapStuckJobs() {
   if (stuckJobs.length === 0) return;
   logger_default.warn(`JobPoller: found ${stuckJobs.length} stuck job(s) with no historyId, marking as failed`);
   await Promise.all(stuckJobs.map(async (dbJob) => {
-    const errorMsg = "\u89C6\u9891\u751F\u6210\u8BF7\u6C42\u672A\u80FD\u63D0\u4EA4\u5230Jimeng\uFF08\u8D85\u65F6\u6216\u670D\u52A1\u4E0D\u53EF\u7528\uFF09";
+    const errorMsg = "Video generation request failed to reach Jimeng (timed out or service unavailable)";
     await updateJobInDb(dbJob.id, { status: "failed", error_message: errorMsg });
     updateJob(dbJob.id, { status: "failed", error: errorMsg });
     logger_default.warn(`JobPoller: reaped stuck job ${dbJob.id} (created ${Math.floor(Date.now() / 1e3) - dbJob.created_at}s ago)`);
@@ -6171,7 +6167,7 @@ async function pollOnce() {
         }
         logger_default.info(`JobPoller: job ${dbJob.id} completed, url: ${result.url}`);
       } else if (result.status === "failed") {
-        const errorMsg = result.error || "\u89C6\u9891\u751F\u6210\u5931\u8D25";
+        const errorMsg = result.error || "Video generation failed";
         await updateJobInDb(dbJob.id, { status: "failed", error_message: errorMsg });
         updateJob(dbJob.id, { status: "failed", error: errorMsg });
         logger_default.error(`JobPoller: job ${dbJob.id} failed - ${errorMsg}`);

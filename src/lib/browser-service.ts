@@ -20,7 +20,7 @@ function findChromiumPath(): string {
   try {
     const playwrightPath = chromium.executablePath();
     if (playwrightPath && fs.existsSync(playwrightPath)) {
-      logger.info(`BrowserService: 使用 Playwright 内置 Chromium: ${playwrightPath}`);
+      logger.info(`BrowserService: using Playwright built-in Chromium: ${playwrightPath}`);
       cachedChromiumPath = playwrightPath;
       return cachedChromiumPath;
     }
@@ -59,7 +59,7 @@ function killTrackedBrowserProcess(): void {
   try {
     execSync(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
     execSync(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
-    logger.info(`BrowserService: 已清理残留浏览器进程 (pid: ${trackedBrowserPid})`);
+    logger.info(`BrowserService: killed stale browser process (pid: ${trackedBrowserPid})`);
   } catch {}
   trackedBrowserPid = null;
 }
@@ -130,7 +130,7 @@ class BrowserService {
     }
     const elapsed = Date.now() - this.apiLastFailureTime;
     if (elapsed > API_CIRCUIT_BREAKER_COOLDOWN) {
-      logger.info(`BrowserService: API熔断器冷却完毕 (${Math.round(elapsed / 1000)}s)，允许重试`);
+      logger.info(`BrowserService: API circuit breaker cooled (${Math.round(elapsed / 1000)}s), allowing retry`);
       this.apiConsecutiveFailures = 0;
       return false;
     }
@@ -143,7 +143,7 @@ class BrowserService {
     }
     const elapsed = Date.now() - this.browserLastFailureTime;
     if (elapsed > BROWSER_CIRCUIT_BREAKER_COOLDOWN) {
-      logger.info(`BrowserService: 浏览器熔断器冷却完毕 (${Math.round(elapsed / 1000)}s)，允许重试`);
+      logger.info(`BrowserService: browser circuit breaker cooled (${Math.round(elapsed / 1000)}s), allowing retry`);
       this.browserConsecutiveFailures = 0;
       return false;
     }
@@ -153,16 +153,16 @@ class BrowserService {
   private recordApiFailure(): void {
     this.apiConsecutiveFailures++;
     this.apiLastFailureTime = Date.now();
-    logger.warn(`BrowserService: API连续失败次数: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
+    logger.warn(`BrowserService: API consecutive failures: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
     if (this.apiConsecutiveFailures >= API_CIRCUIT_BREAKER_THRESHOLD) {
-      logger.warn(`BrowserService: API熔断器已打开，冷却 ${API_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
+      logger.warn(`BrowserService: API circuit breaker OPEN, cooling for ${API_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
       this.scheduleApiRecovery();
     }
   }
 
   private recordApiSuccess(): void {
     if (this.apiConsecutiveFailures > 0) {
-      logger.info(`BrowserService: API恢复成功，重置熔断器 (之前连续失败 ${this.apiConsecutiveFailures} 次)`);
+      logger.info(`BrowserService: API recovered, circuit breaker reset (was ${this.apiConsecutiveFailures} consecutive failures)`);
     }
     this.apiConsecutiveFailures = 0;
   }
@@ -170,23 +170,23 @@ class BrowserService {
   private recordBrowserFailure(): void {
     this.browserConsecutiveFailures++;
     this.browserLastFailureTime = Date.now();
-    logger.warn(`BrowserService: 浏览器连续失败次数: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
+    logger.warn(`BrowserService: browser consecutive failures: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
     if (this.browserConsecutiveFailures >= BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      logger.warn(`BrowserService: 浏览器熔断器已打开，冷却 ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
+      logger.warn(`BrowserService: browser circuit breaker OPEN, cooling for ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
       this.scheduleBrowserRecovery();
     }
   }
 
   private recordBrowserSuccess(): void {
     if (this.browserConsecutiveFailures > 0) {
-      logger.info(`BrowserService: 浏览器恢复成功，重置熔断器 (之前连续失败 ${this.browserConsecutiveFailures} 次)`);
+      logger.info(`BrowserService: browser recovered, circuit breaker reset (was ${this.browserConsecutiveFailures} consecutive failures)`);
     }
     this.browserConsecutiveFailures = 0;
   }
 
   private scheduleApiRecovery(): void {
     setTimeout(() => {
-      logger.info(`BrowserService: API熔断器冷却结束，重置计数`);
+      logger.info(`BrowserService: API circuit breaker cooldown ended, counter reset`);
       this.apiConsecutiveFailures = 0;
     }, API_CIRCUIT_BREAKER_COOLDOWN + 1000);
   }
@@ -194,15 +194,15 @@ class BrowserService {
   private scheduleBrowserRecovery(): void {
     setTimeout(() => {
       if (this.isReady() || this.launching) {
-        logger.info(`BrowserService: 浏览器熔断器恢复检查：浏览器已就绪，无需重连`);
+        logger.info(`BrowserService: browser circuit breaker recovery check: browser ready, no reconnect needed`);
         return;
       }
-      logger.info(`BrowserService: 浏览器熔断器冷却结束，尝试恢复...`);
+      logger.info(`BrowserService: browser circuit breaker cooldown ended, attempting recovery...`);
       this.browserConsecutiveFailures = 0;
       this.ensureBrowser().then(() => {
-        logger.info(`BrowserService: 浏览器熔断器恢复成功`);
+        logger.info(`BrowserService: browser circuit breaker recovered successfully`);
       }).catch((err) => {
-        logger.error(`BrowserService: 浏览器熔断器恢复失败: ${(err as Error).message}`);
+        logger.error(`BrowserService: browser circuit breaker recovery failed: ${(err as Error).message}`);
       });
     }, BROWSER_CIRCUIT_BREAKER_COOLDOWN + 1000);
   }
@@ -212,16 +212,16 @@ class BrowserService {
       return;
     }
 
-    logger.info(`BrowserService: 启动主动后台重连 (${PROACTIVE_RECONNECT_DELAY}ms 后)...`);
+    logger.info(`BrowserService: scheduling proactive reconnect (in ${PROACTIVE_RECONNECT_DELAY}ms)...`);
     setTimeout(() => {
       if (this.isReady() || this.launching || this.isBrowserCircuitOpen()) {
         return;
       }
-      logger.info(`BrowserService: 执行主动后台重连...`);
+      logger.info(`BrowserService: executing proactive background reconnect...`);
       this.ensureBrowser().then(() => {
-        logger.info(`BrowserService: 主动后台重连成功`);
+        logger.info(`BrowserService: proactive reconnect succeeded`);
       }).catch((err) => {
-        logger.error(`BrowserService: 主动后台重连失败: ${(err as Error).message}`);
+        logger.error(`BrowserService: proactive reconnect failed: ${(err as Error).message}`);
       });
     }, PROACTIVE_RECONNECT_DELAY);
   }
@@ -233,7 +233,7 @@ class BrowserService {
 
     if (this.isBrowserCircuitOpen()) {
       const remaining = Math.round((BROWSER_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.browserLastFailureTime)) / 1000);
-      throw new Error(`BrowserService: 浏览器暂时不可用，请 ${remaining}s 后重试`);
+      throw new Error(`BrowserService: browser temporarily unavailable, retry in ${remaining}s`);
     }
 
     if (this.launching) {
@@ -243,10 +243,10 @@ class BrowserService {
     this.launching = (async () => {
       const chromiumPath = findChromiumPath();
       const memInfo = getSystemMemoryInfo();
-      logger.info(`BrowserService: 正在启动 Chromium 浏览器... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
+      logger.info(`BrowserService: launching Chromium... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
 
       if (memInfo.freeMB < 200) {
-        logger.warn(`BrowserService: 可用内存不足 (${memInfo.freeMB}MB)，尝试清理后启动...`);
+        logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, cleaning up before launch...`);
         killTrackedBrowserProcess();
         await new Promise(r => setTimeout(r, 2000));
       }
@@ -257,7 +257,7 @@ class BrowserService {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           if (attempt > 1) {
-            logger.info(`BrowserService: 重试前清理残留进程... (attempt ${attempt})`);
+            logger.info(`BrowserService: cleaning up stale processes before retry... (attempt ${attempt})`);
             killTrackedBrowserProcess();
             await new Promise(r => setTimeout(r, 3000));
           }
@@ -303,13 +303,13 @@ class BrowserService {
             const serverProcess = (this.browser as any)._browserProcess || (this.browser as any)._process;
             if (serverProcess?.pid) {
               trackedBrowserPid = serverProcess.pid;
-              logger.info(`BrowserService: 浏览器进程 PID: ${trackedBrowserPid}`);
+              logger.info(`BrowserService: browser process PID: ${trackedBrowserPid}`);
             }
           } catch {}
 
           this.browser.on("disconnected", () => {
             const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1000) : 0;
-            logger.warn(`BrowserService: 浏览器已断开连接 (运行时长: ${uptime}s, 活跃会话: ${this.sessions.size})`);
+            logger.warn(`BrowserService: browser disconnected (uptime: ${uptime}s, active sessions: ${this.sessions.size})`);
             this.browser = null;
             this.sessions.clear();
             trackedBrowserPid = null;
@@ -319,7 +319,7 @@ class BrowserService {
           this.browserStartCount++;
           this.browserStartTime = Date.now();
           const memAfter = getSystemMemoryInfo();
-          logger.info(`BrowserService: Chromium 浏览器启动成功 (attempt ${attempt}, 第 ${this.browserStartCount} 次启动, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
+          logger.info(`BrowserService: Chromium launched successfully (attempt ${attempt}, start #${this.browserStartCount}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
 
           this.recordBrowserSuccess();
           this.startHealthCheck();
@@ -328,17 +328,17 @@ class BrowserService {
         } catch (err) {
           lastError = err as Error;
           const memErr = getSystemMemoryInfo();
-          logger.error(`BrowserService: 启动失败 (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
+          logger.error(`BrowserService: launch failed (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
           if (attempt < maxAttempts) {
             const backoffMs = 5000 * attempt;
-            logger.info(`BrowserService: 等待 ${backoffMs / 1000}s 后重试...`);
+            logger.info(`BrowserService: retrying in ${backoffMs / 1000}s...`);
             await new Promise(r => setTimeout(r, backoffMs));
           }
         }
       }
 
       this.recordBrowserFailure();
-      throw lastError || new Error("浏览器启动失败");
+      throw lastError || new Error("browser launch failed");
     })().finally(() => {
       this.launching = null;
     });
@@ -354,7 +354,7 @@ class BrowserService {
     this.healthCheckTimer = setInterval(async () => {
       try {
         if (!this.browser?.isConnected()) {
-          logger.warn("BrowserService: 健康检查发现浏览器已断开，启动主动重连...");
+          logger.warn("BrowserService: health check: browser disconnected, triggering reconnect...");
           this.browser = null;
           this.sessions.clear();
           this.stopHealthCheck();
@@ -365,19 +365,19 @@ class BrowserService {
         const memInfo = getSystemMemoryInfo();
         if (memInfo.freeMB < 200 && this.sessions.size > 0) {
           const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
-          logger.warn(`BrowserService: 内存不足 (${memInfo.freeMB}MB free)，清理 ${evictCount} 个会话...`);
+          logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB free), evicting ${evictCount} session(s)...`);
           await this.evictOldestSessions(evictCount);
         }
 
         const now = Date.now();
         for (const [token, session] of this.sessions) {
           if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
-            logger.info(`BrowserService: 健康检查清理过期会话 ${token.substring(0, 8)}...`);
+            logger.info(`BrowserService: health check: closing idle session ${token.substring(0, 8)}...`);
             await this.closeSession(token);
           }
         }
       } catch (err) {
-        logger.error(`BrowserService: 健康检查异常: ${(err as Error).message}`);
+        logger.error(`BrowserService: health check error: ${(err as Error).message}`);
       }
     }, HEALTH_CHECK_INTERVAL);
 
@@ -399,7 +399,7 @@ class BrowserService {
     );
     for (let i = 0; i < Math.min(count, sorted.length); i++) {
       const [token] = sorted[i];
-      logger.info(`BrowserService: 驱逐最旧会话 ${token.substring(0, 8)}...`);
+      logger.info(`BrowserService: evicting oldest session ${token.substring(0, 8)}...`);
       await this.closeSession(token);
     }
   }
@@ -417,13 +417,13 @@ class BrowserService {
           return existing;
         }
       } catch {}
-      logger.info(`BrowserService: 会话 ${token.substring(0, 8)}... 已失效，重新创建`);
+      logger.info(`BrowserService: session ${token.substring(0, 8)}... is stale, recreating`);
       this.sessions.delete(token);
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
     }
 
     if (this.sessions.size >= MAX_SESSIONS) {
-      logger.warn(`BrowserService: 会话数达到上限 (${MAX_SESSIONS})，驱逐最旧会话...`);
+      logger.warn(`BrowserService: session limit reached (${MAX_SESSIONS}), evicting oldest...`);
       await this.evictOldestSessions(1);
     }
 
@@ -438,10 +438,10 @@ class BrowserService {
         const browser = await this.ensureBrowser();
 
         const memInfo = getSystemMemoryInfo();
-        logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... 创建新会话 (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
+        logger.info(`BrowserService: creating session for token ${token.substring(0, 8)}... (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
 
         if (memInfo.freeMB < 150 && this.sessions.size > 0) {
-          logger.warn(`BrowserService: 可用内存不足 (${memInfo.freeMB}MB)，逐步清理会话...`);
+          logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, progressively evicting sessions...`);
           while (this.sessions.size > 0) {
             await this.evictOldestSessions(1);
             const updated = getSystemMemoryInfo();
@@ -483,13 +483,13 @@ class BrowserService {
 
         const page = await context.newPage();
 
-        logger.info("BrowserService: 正在导航到 jimeng.jianying.com ...");
+        logger.info("BrowserService: navigating to jimeng.jianying.com...");
         await page.goto("https://jimeng.jianying.com", {
           waitUntil: "domcontentloaded",
           timeout: 45000,
         });
 
-        logger.info("BrowserService: 等待 bdms SDK 就绪...");
+        logger.info("BrowserService: waiting for bdms SDK...");
         try {
           await page.waitForFunction(
             () => {
@@ -501,10 +501,10 @@ class BrowserService {
             },
             { timeout: BDMS_READY_TIMEOUT }
           );
-          logger.info("BrowserService: bdms SDK 已就绪");
+          logger.info("BrowserService: bdms SDK is ready");
         } catch (err) {
           logger.warn(
-            "BrowserService: bdms SDK 等待超时，可能未完全加载，继续尝试..."
+            "BrowserService: bdms SDK wait timed out, may not be fully loaded, continuing..."
           );
         }
 
@@ -518,7 +518,7 @@ class BrowserService {
         this.sessions.set(token, session);
         return session;
       } catch (err) {
-        logger.error(`BrowserService: 会话创建失败 (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
+        logger.error(`BrowserService: session creation failed (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
         this.browser = null;
         this.sessions.clear();
         if (attempt >= maxAttempts) {
@@ -530,14 +530,14 @@ class BrowserService {
     }
 
     this.recordBrowserFailure();
-    throw new Error("会话创建失败");
+    throw new Error("session creation failed");
   }
 
   private async closeSession(token: string) {
     const session = this.sessions.get(token);
     if (!session) return;
 
-    logger.info(`BrowserService: 关闭空闲会话 ${token.substring(0, 8)}...`);
+    logger.info(`BrowserService: closing idle session ${token.substring(0, 8)}...`);
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
     }
@@ -557,7 +557,7 @@ class BrowserService {
   ): Promise<any> {
     if (this.isApiCircuitOpen()) {
       const remaining = Math.round((API_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.apiLastFailureTime)) / 1000);
-      const error: any = new Error(`BrowserService: 请求暂时不可用，请 ${remaining}s 后重试`);
+      const error: any = new Error(`BrowserService: requests temporarily unavailable, retry in ${remaining}s`);
       error.statusCode = 503;
       error.retryAfter = remaining;
       throw error;
@@ -567,14 +567,14 @@ class BrowserService {
 
     let session: BrowserSession;
     try {
-      logger.info(`BrowserService: 获取会话中...`);
+      logger.info(`BrowserService: acquiring session...`);
       session = await this.getSession(token);
       const sessionElapsed = Date.now() - totalStart;
-      logger.info(`BrowserService: 会话就绪 (${sessionElapsed}ms)`);
+      logger.info(`BrowserService: session ready (${sessionElapsed}ms)`);
     } catch (err) {
       const elapsed = Date.now() - totalStart;
-      logger.error(`BrowserService: 会话获取失败 (${elapsed}ms): ${(err as Error).message}`);
-      const error: any = new Error(`BrowserService: 会话获取失败: ${(err as Error).message}`);
+      logger.error(`BrowserService: session acquisition failed (${elapsed}ms): ${(err as Error).message}`);
+      const error: any = new Error(`BrowserService: session acquisition failed: ${(err as Error).message}`);
       error.statusCode = 503;
       error.retryAfter = 10;
       throw error;
@@ -589,7 +589,7 @@ class BrowserService {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         cancelToken.cancelled = true;
-        reject(new Error(`BrowserService: 请求超时 (${FETCH_TIMEOUT / 1000}s)`));
+        reject(new Error(`BrowserService: request timed out (${FETCH_TIMEOUT / 1000}s)`));
       }, FETCH_TIMEOUT);
     });
 
@@ -599,17 +599,17 @@ class BrowserService {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
       const totalElapsed = Date.now() - totalStart;
-      logger.info(`BrowserService: 请求完成 (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
+      logger.info(`BrowserService: request completed (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
       this.recordApiSuccess();
       return result;
     } catch (err) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const elapsed = Date.now() - fetchStart;
       const totalElapsed = Date.now() - totalStart;
-      logger.error(`BrowserService: 请求失败 (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${(err as Error).message}`);
+      logger.error(`BrowserService: request failed (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${(err as Error).message}`);
 
       if (timedOut) {
-        logger.warn(`BrowserService: 超时，关闭会话以中止任何进行中的请求 ${token.substring(0, 8)}...`);
+        logger.warn(`BrowserService: timed out, closing session ${token.substring(0, 8)}...`);
         this.closeSession(token).catch(() => {});
       }
 
@@ -634,11 +634,11 @@ class BrowserService {
     cancelToken: CancelToken
   ): Promise<any> {
     if (cancelToken.cancelled) {
-      logger.warn(`BrowserService: 请求已取消，跳过发送到 Jimeng`);
-      throw new Error("BrowserService: 请求已被取消");
+      logger.warn(`BrowserService: request cancelled, skipping (already timed out)`);
+      throw new Error("BrowserService: request was cancelled");
     }
 
-    logger.info(`BrowserService: 代理请求 ${options.method || "GET"} ${url.substring(0, 100)}...`);
+    logger.info(`BrowserService: proxying ${options.method || "GET"} ${url.substring(0, 100)}...`);
 
     try {
       const result = await session.page.evaluate(
@@ -667,19 +667,19 @@ class BrowserService {
       );
 
       if (result.error) {
-        throw new Error(`浏览器 fetch 失败: ${result.error}`);
+        throw new Error(`browser fetch error: ${result.error}`);
       }
 
-      logger.info(`BrowserService: 响应状态 ${result.status}`);
+      logger.info(`BrowserService: response status ${result.status}`);
 
       try {
         return JSON.parse(result.text);
       } catch {
-        logger.warn(`BrowserService: 响应不是有效 JSON: ${result.text.substring(0, 200)}`);
+        logger.warn(`BrowserService: response is not valid JSON: ${result.text.substring(0, 200)}`);
         return result.text;
       }
     } catch (err) {
-      logger.error(`BrowserService: 请求执行失败: ${(err as Error).message}`);
+      logger.error(`BrowserService: request execution failed: ${(err as Error).message}`);
       await this.closeSession(token);
       throw err;
     }
@@ -689,16 +689,16 @@ class BrowserService {
     if (this.isReady() || this.launching) {
       return;
     }
-    logger.info(`BrowserService: 预热浏览器...`);
+    logger.info(`BrowserService: warming up browser...`);
     this.ensureBrowser().then(() => {
-      logger.info(`BrowserService: 预热完成，浏览器已就绪`);
+      logger.info(`BrowserService: warm-up complete, browser ready`);
     }).catch((err) => {
-      logger.warn(`BrowserService: 预热失败: ${(err as Error).message}，将在首次请求时重试`);
+      logger.warn(`BrowserService: warm-up failed: ${(err as Error).message}, will retry on first request`);
     });
   }
 
   async close() {
-    logger.info("BrowserService: 正在关闭所有会话和浏览器...");
+    logger.info("BrowserService: shutting down all sessions and browser...");
 
     this.stopHealthCheck();
 
@@ -716,7 +716,7 @@ class BrowserService {
 
     killTrackedBrowserProcess();
 
-    logger.info("BrowserService: 已关闭");
+    logger.info("BrowserService: closed");
   }
 }
 

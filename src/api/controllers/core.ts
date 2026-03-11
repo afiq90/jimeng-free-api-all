@@ -122,7 +122,7 @@ export async function getCredit(refreshToken: string) {
       // Sign: "f3dbb824b378abea7c03cbb152b3a365"
     }
   });
-  logger.info(`\n积分信息: \n赠送积分: ${gift_credit}, 购买积分: ${purchase_credit}, VIP积分: ${vip_credit}`);
+  logger.info(`Credits: gift=${gift_credit}, purchased=${purchase_credit}, VIP=${vip_credit}`);
   return {
     giftCredit: gift_credit,
     purchaseCredit: purchase_credit,
@@ -132,12 +132,12 @@ export async function getCredit(refreshToken: string) {
 }
 
 /**
- * 接收今日积分
+ * 接收Today claimed 积分
  *
  * @param refreshToken 用于刷新access_token的refresh_token
  */
 export async function receiveCredit(refreshToken: string) {
-  logger.info("正在收取今日积分...")
+  logger.info("Claiming daily credits...")
   const { cur_total_credits, receive_quota  } = await request("POST", "/commerce/v1/benefits/credit_receive", refreshToken, {
     data: {
       time_zone: "Asia/Shanghai"
@@ -146,7 +146,7 @@ export async function receiveCredit(refreshToken: string) {
       Referer: "https://jimeng.jianying.com/ai-tool/image/generate"
     }
   });
-  logger.info(`\n今日${receive_quota}积分收取成功\n剩余积分: ${cur_total_credits}`);
+  logger.info(`Daily credits claimed: ${receive_quota}. Remaining balance: ${cur_total_credits}`);
   return cur_total_credits;
 }
 
@@ -192,9 +192,9 @@ export async function request(
     ...(options.headers || {}),
   };
   
-  logger.info(`发送请求: ${method.toUpperCase()} ${fullUrl}`);
-  logger.info(`请求参数: ${JSON.stringify(requestParams)}`);
-  logger.info(`请求数据: ${JSON.stringify(options.data || {})}`);
+  logger.info(`Sending request: ${method.toUpperCase()} ${fullUrl}`);
+  logger.info(`Request params: ${JSON.stringify(requestParams)}`);
+  logger.info(`Request data: ${JSON.stringify(options.data || {})}`);
   
   // 添加重试逻辑
   let retries = 0;
@@ -204,7 +204,7 @@ export async function request(
   while (retries <= maxRetries) {
     try {
       if (retries > 0) {
-        logger.info(`第 ${retries} 次重试请求: ${method.toUpperCase()} ${fullUrl}`);
+        logger.info(`Retry #${retries} ${method.toUpperCase()} ${fullUrl}`);
         // 重试前等待一段时间
         await new Promise(resolve => setTimeout(resolve, 1000 * retries));
       }
@@ -220,7 +220,7 @@ export async function request(
       });
       
       // 记录响应状态和头信息
-      logger.info(`响应状态: ${response.status} ${response.statusText}`);
+      logger.info(`Response status: ${response.status} ${response.statusText}`);
       
       // 流式响应直接返回response
       if (options.responseType == "stream") return response;
@@ -228,11 +228,11 @@ export async function request(
       // 记录响应数据摘要
       const responseDataSummary = JSON.stringify(response.data).substring(0, 500) + 
         (JSON.stringify(response.data).length > 500 ? "..." : "");
-      logger.info(`响应数据摘要: ${responseDataSummary}`);
+      logger.info(`Response data summary: ${responseDataSummary}`);
       
       // 检查HTTP状态码
       if (response.status >= 400) {
-        logger.warn(`HTTP错误: ${response.status} ${response.statusText}`);
+        logger.warn(`HTTP error: ${response.status} ${response.statusText}`);
         if (retries < maxRetries) {
           retries++;
           continue;
@@ -243,7 +243,7 @@ export async function request(
     }
     catch (error) {
       lastError = error;
-      logger.error(`请求失败 (尝试 ${retries + 1}/${maxRetries + 1}): ${error.message}`);
+      logger.error(`Request failed (attempt ${retries + 1}/${maxRetries + 1}): ${error.message}`);
       
       // 如果是网络错误或超时，尝试重试
       if ((error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || 
@@ -259,10 +259,10 @@ export async function request(
   }
   
   // 所有重试都失败了，抛出最后一个错误
-  logger.error(`请求失败，已重试 ${retries} 次: ${lastError.message}`);
+  logger.error(`All retries exhausted after ${retries} retries: ${lastError.message}`);
   if (lastError.response) {
-    logger.error(`响应状态: ${lastError.response.status}`);
-    logger.error(`响应数据: ${JSON.stringify(lastError.response.data)}`);
+    logger.error(`Response status: ${lastError.response.status}`);
+    logger.error(`Response data: ${JSON.stringify(lastError.response.data)}`);
   }
    throw lastError;
  }
@@ -308,7 +308,7 @@ export async function uploadFile(
   isVideoImage: boolean = false
 ) {
   try {
-    logger.info(`开始上传文件: ${fileUrl}, 视频图像模式: ${isVideoImage}`);
+    logger.info(`Uploading file: ${fileUrl}, video-image mode: ${isVideoImage}`);
     
     // 预检查远程文件URL可用性
     await checkFileUrl(fileUrl);
@@ -320,12 +320,12 @@ export async function uploadFile(
       const ext = mime.getExtension(mimeType);
       filename = `${util.uuid()}.${ext}`;
       fileData = Buffer.from(util.removeBASE64DataHeader(fileUrl), "base64");
-      logger.info(`处理BASE64数据，文件名: ${filename}, 类型: ${mimeType}, 大小: ${fileData.length}字节`);
+      logger.info(`Processing base64 data, filename: ${filename}, type: ${mimeType}, size: ${fileData.length}bytes`);
     }
     // 下载文件到内存，如果您的服务器内存很小，建议考虑改造为流直传到下一个接口上，避免停留占用内存
     else {
       filename = path.basename(fileUrl);
-      logger.info(`开始下载远程文件: ${fileUrl}`);
+      logger.info(`Downloading remote file: ${fileUrl}`);
       ({ data: fileData } = await axios.get(fileUrl, {
         responseType: "arraybuffer",
         // 100M限制
@@ -333,12 +333,12 @@ export async function uploadFile(
         // 60秒超时
         timeout: 60000,
       }));
-      logger.info(`文件下载完成，文件名: ${filename}, 大小: ${fileData.length}字节`);
+      logger.info(`File downloaded, filename: ${filename}, size: ${fileData.length}bytes`);
     }
 
     // 获取文件的MIME类型
     mimeType = mimeType || mime.getType(filename);
-    logger.info(`文件MIME类型: ${mimeType}`);
+    logger.info(`File MIME type: ${mimeType}`);
     
     // 构建FormData
     const formData = new FormData();
@@ -346,7 +346,7 @@ export async function uploadFile(
     formData.append('file', blob, filename);
     
     // 获取上传凭证
-    logger.info(`请求上传凭证，场景: ${isVideoImage ? 'video_cover' : 'aigc_image'}`);
+    logger.info(`Requesting upload token, scene: ${isVideoImage ? 'video_cover' : 'aigc_image'}`);
     const uploadProofUrl = 'https://imagex.bytedanceapi.com/';
     const proofResult = await request(
       'POST',
@@ -362,15 +362,15 @@ export async function uploadFile(
     );
     
     if (!proofResult || !proofResult.proof_info) {
-      logger.error(`获取上传凭证失败: ${JSON.stringify(proofResult)}`);
-      throw new APIException(EX.API_REQUEST_FAILED, '获取上传凭证失败');
+      logger.error(`Failed to get upload token: ${JSON.stringify(proofResult)}`);
+      throw new APIException(EX.API_REQUEST_FAILED, 'Failed to get upload token');
     }
     
-    logger.info(`获取上传凭证成功`);
+    logger.info(`Upload token obtained`);
     
     // 上传文件
     const { proof_info } = proofResult;
-    logger.info(`开始上传文件到: ${uploadProofUrl}`);
+    logger.info(`Uploading file to: ${uploadProofUrl}`);
     
     const uploadResult = await axios.post(
       uploadProofUrl,
@@ -386,20 +386,20 @@ export async function uploadFile(
       }
     );
     
-    logger.info(`上传响应状态: ${uploadResult.status}`);
+    logger.info(`Upload response status: ${uploadResult.status}`);
     
     if (!uploadResult || uploadResult.status !== 200) {
-      logger.error(`上传文件失败: 状态码 ${uploadResult?.status}, 响应: ${JSON.stringify(uploadResult?.data)}`);
-      throw new APIException(EX.API_REQUEST_FAILED, `上传文件失败: 状态码 ${uploadResult?.status}`);
+      logger.error(`Upload failed: HTTP ${uploadResult?.status}, response: ${JSON.stringify(uploadResult?.data)}`);
+      throw new APIException(EX.API_REQUEST_FAILED, `Upload failed: HTTP ${uploadResult?.status}`);
     }
     
     // 验证 proof_info.image_uri 是否存在
     if (!proof_info.image_uri) {
-      logger.error(`上传凭证中缺少 image_uri: ${JSON.stringify(proof_info)}`);
-      throw new APIException(EX.API_REQUEST_FAILED, '上传凭证中缺少 image_uri');
+      logger.error(`Upload token missing image_uri: ${JSON.stringify(proof_info)}`);
+      throw new APIException(EX.API_REQUEST_FAILED, 'Upload token missing image_uri');
     }
     
-    logger.info(`文件上传成功: ${proof_info.image_uri}`);
+    logger.info(`File uploaded successfully: ${proof_info.image_uri}`);
     
     // 返回上传结果
     return {
@@ -407,7 +407,7 @@ export async function uploadFile(
       uri: proof_info.image_uri,
     }
   } catch (error) {
-    logger.error(`文件上传过程中发生错误: ${error.message}`);
+    logger.error(`File upload error: ${error.message}`);
     throw error;
   }
 }
@@ -422,8 +422,8 @@ export function checkResult(result: AxiosResponse) {
   if (!_.isFinite(Number(ret))) return result.data;
   if (ret === '0') return data;
   if (ret === '5000')
-    throw new APIException(EX.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[无法生成图像]: 即梦积分可能不足，${errmsg}`);
-  throw new APIException(EX.API_REQUEST_FAILED, `[请求jimeng失败]: ${errmsg}`);
+    throw new APIException(EX.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
+  throw new APIException(EX.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
 }
 
 /**
