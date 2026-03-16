@@ -11,7 +11,7 @@ import browserService from '@/lib/browser-service.ts';
 import util from '@/lib/util.ts';
 import logger from '@/lib/logger.ts';
 
-const MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "400", 10);
+const MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
 
 export default {
 

@@ -5965,7 +5965,7 @@ var models_default = {
 // src/api/routes/videos.ts
 import _16 from "lodash";
 import os3 from "os";
-var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "400", 10);
+var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
 var videos_default = {
   prefix: "/v1/videos",
   post: {

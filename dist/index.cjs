@@ -5989,7 +5989,7 @@ var models_default = {
 // src/api/routes/videos.ts
 var import_lodash16 = __toESM(require("lodash"), 1);
 var import_os3 = __toESM(require("os"), 1);
-var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "400", 10);
+var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
 var videos_default = {
   prefix: "/v1/videos",
   post: {
