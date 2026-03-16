@@ -1,4 +1,5 @@
 import _ from 'lodash';
+import os from 'os';
 
 import Request from '@/lib/request/Request.ts';
 import Response from '@/lib/response/Response.ts';
@@ -6,8 +7,11 @@ import { tokenSplit } from '@/api/controllers/core.ts';
 import { generateVideo, generateSeedanceVideo, isSeedanceModel, DEFAULT_MODEL } from '@/api/controllers/videos.ts';
 import { createJob, updateJob } from '@/lib/job-store.ts';
 import { saveJobToDb, updateJobInDb } from '@/lib/db.ts';
+import browserService from '@/lib/browser-service.ts';
 import util from '@/lib/util.ts';
 import logger from '@/lib/logger.ts';
+
+const MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "400", 10);
 
 export default {
 
@@ -21,7 +25,7 @@ export default {
             const foundUnsupported = unsupportedParams.filter(param => bodyKeys.includes(param));
 
             if (foundUnsupported.length > 0) {
-                throw new Error(`不支持的参数: ${foundUnsupported.join(', ')}。请使用 ratio 和 resolution 参数控制视频尺寸。`);
+                throw new Error(`Unsupported parameters: ${foundUnsupported.join(', ')}. Use ratio and resolution to control video dimensions.`);
             }
 
             const contentType = request.headers['content-type'] || '';
@@ -65,8 +69,17 @@ export default {
 
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
 
+            const freeMB = Math.round(os.freemem() / 1024 / 1024);
+            if (freeMB < MEMORY_GATE_MB) {
+                logger.warn(`VideoRoute: memory gate triggered - ${freeMB}MB free, need ${MEMORY_GATE_MB}MB, rejecting job`);
+                return new Response(
+                    { error: { message: `Service temporarily unavailable: low memory (${freeMB}MB free). Please retry in 60 seconds.`, type: 'server_error', code: 'service_unavailable' } },
+                    { statusCode: 503, headers: { 'Retry-After': '60' } }
+                );
+            }
+
             const job = createJob();
-            logger.info(`Job ${job.id}: created for model=${model}`);
+            logger.info(`Job ${job.id}: created for model=${model} (memory: ${freeMB}MB free)`);
 
             (async () => {
                 try {
@@ -115,6 +128,7 @@ export default {
                     // null means historyId was saved and polling handed off to background worker
                     if (videoUrl === null) {
                         logger.info(`Job ${job.id}: handed off to background poller`);
+                        browserService.recordJobCompleted();
                         return;
                     }
 
@@ -133,6 +147,7 @@ export default {
                     }
 
                     logger.info(`Job ${job.id}: completed`);
+                    browserService.recordJobCompleted();
                 } catch (err: any) {
                     const message = err?.message || String(err);
                     updateJob(job.id, { status: 'failed', error: message });

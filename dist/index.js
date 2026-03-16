@@ -1035,6 +1035,8 @@ var API_CIRCUIT_BREAKER_THRESHOLD = 3;
 var API_CIRCUIT_BREAKER_COOLDOWN = 20 * 1e3;
 var BROWSER_CIRCUIT_BREAKER_THRESHOLD = 3;
 var BROWSER_CIRCUIT_BREAKER_COOLDOWN = 30 * 1e3;
+var RECYCLE_AFTER_N_JOBS = parseInt(process.env.BROWSER_RECYCLE_AFTER_JOBS || "5", 10);
+var RECYCLE_DELAY_MS = 5e3;
 var BrowserService = class {
   browser = null;
   sessions = /* @__PURE__ */ new Map();
@@ -1046,6 +1048,8 @@ var BrowserService = class {
   browserLastFailureTime = 0;
   browserStartCount = 0;
   browserStartTime = 0;
+  jobsCompletedCount = 0;
+  recycleScheduled = false;
   isReady() {
     return this.browser !== null && this.browser.isConnected();
   }
@@ -1529,6 +1533,43 @@ var BrowserService = class {
       await this.closeSession(token);
       throw err;
     }
+  }
+  recordJobCompleted() {
+    this.jobsCompletedCount++;
+    logger_default.info(`BrowserService: job completed (${this.jobsCompletedCount}/${RECYCLE_AFTER_N_JOBS} until proactive recycle)`);
+    if (this.jobsCompletedCount >= RECYCLE_AFTER_N_JOBS && !this.recycleScheduled) {
+      this.scheduleRecycle();
+    }
+  }
+  scheduleRecycle() {
+    this.recycleScheduled = true;
+    this.jobsCompletedCount = 0;
+    const memBefore = getSystemMemoryInfo();
+    logger_default.info(`BrowserService: scheduling proactive recycle in ${RECYCLE_DELAY_MS / 1e3}s (memory: ${memBefore.freeMB}MB free, ${memBefore.usedPercent}% used)`);
+    setTimeout(async () => {
+      try {
+        logger_default.info(`BrowserService: executing proactive recycle - closing sessions and browser...`);
+        this.stopHealthCheck();
+        for (const [token] of this.sessions) {
+          await this.closeSession(token);
+        }
+        if (this.browser) {
+          try {
+            await this.browser.close();
+          } catch {
+          }
+          this.browser = null;
+        }
+        killTrackedBrowserProcess();
+        const memAfter = getSystemMemoryInfo();
+        logger_default.info(`BrowserService: proactive recycle complete (memory: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used) - relaunching...`);
+        this.recycleScheduled = false;
+        this.warmUp();
+      } catch (err) {
+        logger_default.error(`BrowserService: proactive recycle failed: ${err.message}`);
+        this.recycleScheduled = false;
+      }
+    }, RECYCLE_DELAY_MS);
   }
   warmUp() {
     if (this.isReady() || this.launching) {
@@ -5923,6 +5964,8 @@ var models_default = {
 
 // src/api/routes/videos.ts
 import _16 from "lodash";
+import os3 from "os";
+var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "400", 10);
 var videos_default = {
   prefix: "/v1/videos",
   post: {
@@ -5931,7 +5974,7 @@ var videos_default = {
       const bodyKeys = Object.keys(request2.body);
       const foundUnsupported = unsupportedParams.filter((param) => bodyKeys.includes(param));
       if (foundUnsupported.length > 0) {
-        throw new Error(`\u4E0D\u652F\u6301\u7684\u53C2\u6570: ${foundUnsupported.join(", ")}\u3002\u8BF7\u4F7F\u7528 ratio \u548C resolution \u53C2\u6570\u63A7\u5236\u89C6\u9891\u5C3A\u5BF8\u3002`);
+        throw new Error(`Unsupported parameters: ${foundUnsupported.join(", ")}. Use ratio and resolution to control video dimensions.`);
       }
       const contentType = request2.headers["content-type"] || "";
       const isMultiPart = contentType.startsWith("multipart/form-data");
@@ -5957,8 +6000,16 @@ var videos_default = {
       } = request2.body;
       const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
       const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      const freeMB = Math.round(os3.freemem() / 1024 / 1024);
+      if (freeMB < MEMORY_GATE_MB) {
+        logger_default.warn(`VideoRoute: memory gate triggered - ${freeMB}MB free, need ${MEMORY_GATE_MB}MB, rejecting job`);
+        return new Response(
+          { error: { message: `Service temporarily unavailable: low memory (${freeMB}MB free). Please retry in 60 seconds.`, type: "server_error", code: "service_unavailable" } },
+          { statusCode: 503, headers: { "Retry-After": "60" } }
+        );
+      }
       const job = createJob();
-      logger_default.info(`Job ${job.id}: created for model=${model}`);
+      logger_default.info(`Job ${job.id}: created for model=${model} (memory: ${freeMB}MB free)`);
       (async () => {
         try {
           updateJob(job.id, { status: "processing" });
@@ -6003,6 +6054,7 @@ var videos_default = {
           }
           if (videoUrl === null) {
             logger_default.info(`Job ${job.id}: handed off to background poller`);
+            browser_service_default.recordJobCompleted();
             return;
           }
           if (response_format === "b64_json") {
@@ -6018,6 +6070,7 @@ var videos_default = {
             });
           }
           logger_default.info(`Job ${job.id}: completed`);
+          browser_service_default.recordJobCompleted();
         } catch (err) {
           const message = (err == null ? void 0 : err.message) || String(err);
           updateJob(job.id, { status: "failed", error: message });

@@ -94,6 +94,9 @@ const API_CIRCUIT_BREAKER_COOLDOWN = 20 * 1000;
 const BROWSER_CIRCUIT_BREAKER_THRESHOLD = 3;
 const BROWSER_CIRCUIT_BREAKER_COOLDOWN = 30 * 1000;
 
+const RECYCLE_AFTER_N_JOBS = parseInt(process.env.BROWSER_RECYCLE_AFTER_JOBS || "5", 10);
+const RECYCLE_DELAY_MS = 5000;
+
 interface BrowserSession {
   context: BrowserContext;
   page: Page;
@@ -119,6 +122,9 @@ class BrowserService {
 
   private browserStartCount: number = 0;
   private browserStartTime: number = 0;
+
+  private jobsCompletedCount: number = 0;
+  private recycleScheduled: boolean = false;
 
   private isReady(): boolean {
     return this.browser !== null && this.browser.isConnected();
@@ -683,6 +689,46 @@ class BrowserService {
       await this.closeSession(token);
       throw err;
     }
+  }
+
+  recordJobCompleted(): void {
+    this.jobsCompletedCount++;
+    logger.info(`BrowserService: job completed (${this.jobsCompletedCount}/${RECYCLE_AFTER_N_JOBS} until proactive recycle)`);
+    if (this.jobsCompletedCount >= RECYCLE_AFTER_N_JOBS && !this.recycleScheduled) {
+      this.scheduleRecycle();
+    }
+  }
+
+  private scheduleRecycle(): void {
+    this.recycleScheduled = true;
+    this.jobsCompletedCount = 0;
+    const memBefore = getSystemMemoryInfo();
+    logger.info(`BrowserService: scheduling proactive recycle in ${RECYCLE_DELAY_MS / 1000}s (memory: ${memBefore.freeMB}MB free, ${memBefore.usedPercent}% used)`);
+
+    setTimeout(async () => {
+      try {
+        logger.info(`BrowserService: executing proactive recycle - closing sessions and browser...`);
+        this.stopHealthCheck();
+
+        for (const [token] of this.sessions) {
+          await this.closeSession(token);
+        }
+
+        if (this.browser) {
+          try { await this.browser.close(); } catch {}
+          this.browser = null;
+        }
+        killTrackedBrowserProcess();
+
+        const memAfter = getSystemMemoryInfo();
+        logger.info(`BrowserService: proactive recycle complete (memory: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used) - relaunching...`);
+        this.recycleScheduled = false;
+        this.warmUp();
+      } catch (err) {
+        logger.error(`BrowserService: proactive recycle failed: ${(err as Error).message}`);
+        this.recycleScheduled = false;
+      }
+    }, RECYCLE_DELAY_MS);
   }
 
   warmUp(): void {
