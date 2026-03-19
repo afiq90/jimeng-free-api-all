@@ -1,5 +1,46 @@
 import logger from './logger.js';
 import browserService from './browser-service.js';
+import { Pool } from 'pg';
+
+// Initialize database tables if they don't exist
+export async function initializeDatabase() {
+    if (!process.env.DATABASE_URL) {
+        logger.warn('DATABASE_URL not set, skipping database initialization');
+        return;
+    }
+
+    const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        connectionTimeoutMillis: 5000,
+    });
+
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS video_jobs (
+                id UUID PRIMARY KEY,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                jimeng_history_id VARCHAR(255),
+                refresh_token TEXT,
+                model VARCHAR(255),
+                prompt TEXT,
+                response_format VARCHAR(50),
+                error_message TEXT,
+                result_url TEXT,
+                result_b64_json TEXT,
+                result_revised_prompt TEXT,
+                last_poll_at INTEGER
+            )
+        `);
+        logger.success('DB: video_jobs table initialized');
+    } catch (err: any) {
+        logger.error(`DB: failed to initialize tables: ${err.message}`);
+        throw err;
+    } finally {
+        await pool.end();
+    }
+}
 
 // 允许无限量的监听器
 process.setMaxListeners(Infinity);
