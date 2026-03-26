@@ -4,7 +4,34 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["glib", "nss", "nspr", "atk", "at-spi2-atk", "cups", "libdrm", "gtk3", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "expat", "alsa-lib", "dbus", "at-spi2-core", "xorg.libxshmfence", "libxkbcommon", "libgbm"]
+packages = [
+  "glib",
+  "nss",
+  "nspr",
+  "atk",
+  "at-spi2-atk",
+  "cups",
+  "libdrm",
+  "gtk3",
+  "pango",
+  "cairo",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+  "mesa",
+  "expat",
+  "alsa-lib",
+  "dbus",
+  "at-spi2-core",
+  "xorg.libxshmfence",
+  "libxkbcommon",
+  "libgbm",
+  "wget",
+]
 
 [workflows]
 runButton = "Project"
@@ -36,7 +63,11 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "vm"
-run = ["sh", "-c", "PLAYWRIGHT_BROWSERS_PATH=/home/runner/workspace/playwright-browsers npx playwright install chromium && node --enable-source-maps --no-node-snapshot dist/index.js"]
+run = [
+  "sh",
+  "-c",
+  "PLAYWRIGHT_BROWSERS_PATH=/home/runner/workspace/playwright-browsers npx playwright install chromium && node --enable-source-maps --no-node-snapshot dist/index.js",
+]
 build = ["npm", "run", "build"]
 
 [userenv]
