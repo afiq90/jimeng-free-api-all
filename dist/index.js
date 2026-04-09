@@ -7936,379 +7936,7 @@ var models_default = {
 
 // src/api/routes/videos.ts
 import _16 from "lodash";
-var videos_default = {
-  prefix: "/v1/videos",
-  post: {
-    "/generations": async (request2) => {
-      const unsupportedParams = ["size", "width", "height"];
-      const bodyKeys = Object.keys(request2.body);
-      const foundUnsupported = unsupportedParams.filter((param) => bodyKeys.includes(param));
-      if (foundUnsupported.length > 0) {
-        throw new Error(`\u4E0D\u652F\u6301\u7684\u53C2\u6570: ${foundUnsupported.join(", ")}\u3002\u8BF7\u4F7F\u7528 ratio \u548C resolution \u53C2\u6570\u63A7\u5236\u89C6\u9891\u5C3A\u5BF8\u3002`);
-      }
-      const contentType = request2.headers["content-type"] || "";
-      const isMultiPart = contentType.startsWith("multipart/form-data");
-      request2.validate("body.model", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.duration", (v) => {
-        if (_16.isUndefined(v)) return true;
-        if (isMultiPart && typeof v === "string") {
-          const num = parseInt(v);
-          return num >= 4 && num <= 15 || num === 5 || num === 10;
-        }
-        return _16.isFinite(v) && (v >= 4 && v <= 15 || v === 5 || v === 10);
-      }).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.response_format", (v) => _16.isUndefined(v) || _16.isString(v)).validate("headers.authorization", _16.isString);
-      const tokens = tokenSplit(request2.headers.authorization);
-      const token = _16.sample(tokens);
-      const {
-        model = DEFAULT_MODEL2,
-        prompt,
-        ratio = "1:1",
-        resolution = "720p",
-        duration = 5,
-        file_paths = [],
-        filePaths = [],
-        response_format = "url"
-      } = request2.body;
-      const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
-      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      let videoUrl;
-      if (isSeedanceModel(model)) {
-        const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
-        const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
-        videoUrl = await generateSeedanceVideo(
-          model,
-          prompt,
-          {
-            ratio: seedanceRatio,
-            resolution,
-            duration: seedanceDuration,
-            filePaths: finalFilePaths,
-            files: request2.files
-          },
-          token
-        );
-      } else {
-        videoUrl = await generateVideo(
-          model,
-          prompt,
-          {
-            ratio,
-            resolution,
-            duration: finalDuration,
-            filePaths: finalFilePaths,
-            files: request2.files
-          },
-          token
-        );
-      }
-      if (response_format === "b64_json") {
-        const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
-        return {
-          created: util_default.unixTimestamp(),
-          data: [{
-            b64_json: videoBase64,
-            revised_prompt: prompt
-          }]
-        };
-      } else {
-        return {
-          created: util_default.unixTimestamp(),
-          data: [{
-            url: videoUrl,
-            revised_prompt: prompt
-          }]
-        };
-      }
-    },
-    // ========== 异步视频生成接口：提交任务 ==========
-    "/international/generations": async (request2) => {
-      const contentType = request2.headers["content-type"] || "";
-      const isMultiPart = contentType.startsWith("multipart/form-data");
-      const allowedModels = [
-        "seedance-2.0-fast",
-        "seedance-2.0-pro",
-        "jimeng-video-seedance-2.0-fast",
-        "jimeng-video-seedance-2.0",
-        "jimeng-video-seedance-2.0-fast-vip",
-        "seedance-2.0-fast-vip",
-        "jimeng-video-seedance-2.0-vip",
-        "seedance-2.0-vip",
-        "jimeng-video-3.5-pro",
-        "jimeng-video-3.0",
-        "jimeng-video-3.0-pro"
-      ];
-      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
-      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
-        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
-      );
-      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.response_format", (v) => _16.isUndefined(v) || _16.isString(v)).validate("headers.authorization", _16.isString);
-      const tokens = tokenSplit(request2.headers.authorization);
-      const token = _16.sample(tokens);
-      const {
-        model,
-        prompt = "",
-        ratio,
-        resolution = "720p",
-        duration,
-        file_paths = [],
-        filePaths = [],
-        response_format = "url"
-      } = request2.body;
-      const isSeedance = isInternationalSeedanceModel(model);
-      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
-      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
-      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
-        throw new Error("duration \u53C2\u6570\u65E0\u6548");
-      }
-      if (isSeedance) {
-        if (finalDuration < 4 || finalDuration > 15) {
-          throw new Error("\u56FD\u9645 Seedance \u6A21\u578B duration \u4EC5\u652F\u6301 4-15 \u79D2");
-        }
-        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
-          throw new Error("\u56FD\u9645 Seedance \u63A5\u53E3\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u7D20\u6750\uFF1Akeyed multipart \u6587\u4EF6\u3001keyed URL \u5B57\u6BB5\u6216 file_paths/filePaths");
-        }
-      } else {
-        if (finalDuration !== 5 && finalDuration !== 10) {
-          throw new Error("\u56FD\u9645\u666E\u901A\u89C6\u9891\u6A21\u578B duration \u4EC5\u652F\u6301 5 \u6216 10 \u79D2");
-        }
-      }
-      let videoUrl;
-      if (isSeedance) {
-        videoUrl = await generateInternationalSeedanceVideo(
-          model,
-          prompt,
-          {
-            ratio: finalRatio,
-            resolution,
-            duration: finalDuration,
-            filePaths: finalFilePaths,
-            filesMap: request2.filesMap,
-            body: request2.body
-          },
-          token
-        );
-      } else if (isInternationalVideoModel(model)) {
-        videoUrl = await generateInternationalVideo(
-          model,
-          prompt,
-          {
-            ratio: finalRatio,
-            resolution,
-            duration: finalDuration,
-            filePaths: finalFilePaths,
-            files: request2.files
-          },
-          token
-        );
-      } else {
-        throw new Error(`\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${model}`);
-      }
-      if (response_format === "b64_json") {
-        const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
-        return {
-          created: util_default.unixTimestamp(),
-          data: [{ b64_json: videoBase64, revised_prompt: prompt }]
-        };
-      }
-      return {
-        created: util_default.unixTimestamp(),
-        data: [{ url: videoUrl, revised_prompt: prompt }]
-      };
-    },
-    // ========== 国际版异步视频生成接口：提交任务 ==========
-    "/international/generations/async": async (request2) => {
-      const contentType = request2.headers["content-type"] || "";
-      const isMultiPart = contentType.startsWith("multipart/form-data");
-      const allowedModels = [
-        "seedance-2.0-fast",
-        "seedance-2.0-pro",
-        "jimeng-video-seedance-2.0-fast",
-        "jimeng-video-seedance-2.0",
-        "jimeng-video-seedance-2.0-fast-vip",
-        "seedance-2.0-fast-vip",
-        "jimeng-video-seedance-2.0-vip",
-        "seedance-2.0-vip",
-        "jimeng-video-3.5-pro",
-        "jimeng-video-3.0",
-        "jimeng-video-3.0-pro"
-      ];
-      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
-      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
-        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
-      );
-      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
-      const tokens = tokenSplit(request2.headers.authorization);
-      const token = _16.sample(tokens);
-      const {
-        model,
-        prompt = "",
-        ratio,
-        resolution = "720p",
-        duration,
-        file_paths = [],
-        filePaths = []
-      } = request2.body;
-      const isSeedance = isInternationalSeedanceModel(model);
-      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
-      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
-      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
-        throw new Error("duration \u53C2\u6570\u65E0\u6548");
-      }
-      if (isSeedance) {
-        if (finalDuration < 4 || finalDuration > 15) {
-          throw new Error("\u56FD\u9645 Seedance \u6A21\u578B duration \u4EC5\u652F\u6301 4-15 \u79D2");
-        }
-        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
-          throw new Error("\u56FD\u9645 Seedance \u63A5\u53E3\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u7D20\u6750\uFF1Akeyed multipart \u6587\u4EF6\u3001keyed URL \u5B57\u6BB5\u6216 file_paths/filePaths");
-        }
-      } else if (isInternationalVideoModel(model)) {
-        if (finalDuration !== 5 && finalDuration !== 10) {
-          throw new Error("\u56FD\u9645\u666E\u901A\u89C6\u9891\u6A21\u578B duration \u4EC5\u652F\u6301 5 \u6216 10 \u79D2");
-        }
-      } else {
-        throw new Error(`\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${model}`);
-      }
-      const taskId = submitInternationalAsyncVideoTask(
-        model,
-        prompt,
-        {
-          ratio: finalRatio,
-          resolution,
-          duration: finalDuration,
-          filePaths: finalFilePaths,
-          files: request2.files,
-          filesMap: request2.filesMap,
-          body: request2.body
-        },
-        token
-      );
-      return {
-        created: util_default.unixTimestamp(),
-        task_id: taskId,
-        status: "processing",
-        message: "\u4EFB\u52A1\u5DF2\u63D0\u4EA4\uFF0C\u8BF7\u4F7F\u7528 GET /v1/videos/international/generations/async/{task_id} \u67E5\u8BE2\u7ED3\u679C"
-      };
-    },
-    "/generations/async": async (request2) => {
-      const contentType = request2.headers["content-type"] || "";
-      const isMultiPart = contentType.startsWith("multipart/form-data");
-      request2.validate("body.model", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.duration", (v) => {
-        if (_16.isUndefined(v)) return true;
-        if (isMultiPart && typeof v === "string") {
-          const num = parseInt(v);
-          return num >= 4 && num <= 15 || num === 5 || num === 10;
-        }
-        return _16.isFinite(v) && (v >= 4 && v <= 15 || v === 5 || v === 10);
-      }).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
-      const tokens = tokenSplit(request2.headers.authorization);
-      const token = _16.sample(tokens);
-      const {
-        model = DEFAULT_MODEL2,
-        prompt,
-        ratio = "1:1",
-        resolution = "720p",
-        duration = 5,
-        file_paths = [],
-        filePaths = []
-      } = request2.body;
-      const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
-      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      const taskId = submitAsyncVideoTask(
-        model,
-        prompt,
-        {
-          ratio,
-          resolution,
-          duration: finalDuration,
-          filePaths: finalFilePaths,
-          files: request2.files
-        },
-        token
-      );
-      return {
-        created: util_default.unixTimestamp(),
-        task_id: taskId,
-        status: "processing",
-        message: "\u4EFB\u52A1\u5DF2\u63D0\u4EA4\uFF0C\u8BF7\u4F7F\u7528 GET /v1/videos/generations/async/{task_id} \u67E5\u8BE2\u7ED3\u679C"
-      };
-    }
-  },
-  get: {
-    // ========== 国际版异步视频生成接口：查询结果 ==========
-    "/international/generations/async/:taskId": async (request2) => {
-      const { taskId } = request2.params;
-      if (!taskId) {
-        throw new Error("\u7F3A\u5C11 task_id \u53C2\u6570");
-      }
-      const task = await queryAsyncVideoTask(taskId);
-      if (task.status === "succeeded") {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: "succeeded",
-          data: [{
-            url: task.result.url,
-            revised_prompt: task.result.revised_prompt
-          }]
-        };
-      } else if (task.status === "failed") {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: "failed",
-          error: task.error
-        };
-      } else {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: task.status,
-          message: "\u4EFB\u52A1\u5904\u7406\u4E2D"
-        };
-      }
-    },
-    // ========== 异步视频生成接口：查询结果 ==========
-    "/generations/async/:taskId": async (request2) => {
-      const { taskId } = request2.params;
-      if (!taskId) {
-        throw new Error("\u7F3A\u5C11 task_id \u53C2\u6570");
-      }
-      const task = await queryAsyncVideoTask(taskId);
-      if (task.status === "succeeded") {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: "succeeded",
-          data: [{
-            url: task.result.url,
-            revised_prompt: task.result.revised_prompt
-          }]
-        };
-      } else if (task.status === "failed") {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: "failed",
-          error: task.error
-        };
-      } else {
-        return {
-          created: util_default.unixTimestamp(),
-          task_id: task.taskId,
-          status: task.status,
-          message: "\u4EFB\u52A1\u5904\u7406\u4E2D"
-        };
-      }
-    }
-  }
-};
-
-// src/api/routes/video.ts
-var video_default = {
-  ...videos_default,
-  prefix: "/v1/video"
-};
+import os2 from "os";
 
 // src/lib/job-store.ts
 import { v1 as uuid2 } from "uuid";
@@ -8326,6 +7954,18 @@ var pool = new Pool2({
 pool.on("error", (err) => {
   logger_default.error(`DB: pool error: ${err.message}`);
 });
+async function saveJobToDb(id, status, created) {
+  try {
+    await pool.query(
+      `INSERT INTO video_jobs (id, status, created_at, updated_at)
+             VALUES ($1, $2, $3, $3)
+             ON CONFLICT (id) DO NOTHING`,
+      [id, status, created]
+    );
+  } catch (err) {
+    logger_default.error(`DB: saveJobToDb failed for ${id}: ${err.message}`);
+  }
+}
 async function updateJobInDb(id, update) {
   const now = Math.floor(Date.now() / 1e3);
   const keys = Object.keys(update);
@@ -8422,6 +8062,16 @@ function dbJobToJob(dbJob) {
   }
   return job;
 }
+function createJob() {
+  const id = uuid2();
+  const now = Math.floor(Date.now() / 1e3);
+  const job = { id, status: "pending", created: now, updated: now };
+  jobs.set(id, job);
+  saveJobToDb(id, "pending", now).catch(
+    (err) => logger_default.error(`JobStore: failed to persist job ${id} to DB: ${err.message}`)
+  );
+  return job;
+}
 function updateJob(id, update) {
   var _a, _b, _c;
   const job = jobs.get(id);
@@ -8449,6 +8099,458 @@ async function getJob(id) {
   jobs.set(id, job);
   return job;
 }
+
+// src/api/routes/videos.ts
+var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
+function checkMemoryGate() {
+  const freeMB = Math.round(os2.freemem() / 1024 / 1024);
+  if (freeMB < MEMORY_GATE_MB) {
+    logger_default.warn(`VideoRoute: memory gate triggered - ${freeMB}MB free, need ${MEMORY_GATE_MB}MB, rejecting job`);
+    return new Response(
+      { error: { message: `Service temporarily unavailable: low memory (${freeMB}MB free). Please retry in 60 seconds.`, type: "server_error", code: "service_unavailable" } },
+      { statusCode: 503, headers: { "Retry-After": "60" } }
+    );
+  }
+  return null;
+}
+var videos_default = {
+  prefix: "/v1/videos",
+  post: {
+    // ========== 1. Domestic Sync → now async with PostgreSQL ==========
+    "/generations": async (request2) => {
+      const unsupportedParams = ["size", "width", "height"];
+      const bodyKeys = Object.keys(request2.body);
+      const foundUnsupported = unsupportedParams.filter((param) => bodyKeys.includes(param));
+      if (foundUnsupported.length > 0) {
+        throw new Error(`Unsupported parameters: ${foundUnsupported.join(", ")}. Use ratio and resolution to control video dimensions.`);
+      }
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      request2.validate("body.model", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.duration", (v) => {
+        if (_16.isUndefined(v)) return true;
+        if (isMultiPart && typeof v === "string") {
+          const num = parseInt(v);
+          return num >= 4 && num <= 15 || num === 5 || num === 10;
+        }
+        return _16.isFinite(v) && (v >= 4 && v <= 15 || v === 5 || v === 10);
+      }).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.response_format", (v) => _16.isUndefined(v) || _16.isString(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model = DEFAULT_MODEL2,
+        prompt,
+        ratio = "1:1",
+        resolution = "720p",
+        duration = 5,
+        file_paths = [],
+        filePaths = [],
+        response_format = "url"
+      } = request2.body;
+      const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      const memBlock = checkMemoryGate();
+      if (memBlock) return memBlock;
+      const job = createJob();
+      const freeMB = Math.round(os2.freemem() / 1024 / 1024);
+      logger_default.info(`Job ${job.id}: created for domestic model=${model} (memory: ${freeMB}MB free)`);
+      (async () => {
+        try {
+          updateJob(job.id, { status: "processing" });
+          await updateJobInDb(job.id, {
+            status: "processing",
+            model,
+            prompt: prompt || "",
+            response_format,
+            refresh_token: token
+          });
+          let videoUrl;
+          if (isSeedanceModel(model)) {
+            const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
+            const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
+            videoUrl = await generateSeedanceVideo(
+              model,
+              prompt,
+              { ratio: seedanceRatio, resolution, duration: seedanceDuration, filePaths: finalFilePaths, files: request2.files },
+              token
+            );
+          } else {
+            videoUrl = await generateVideo(
+              model,
+              prompt,
+              { ratio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request2.files },
+              token
+            );
+          }
+          if (response_format === "b64_json") {
+            const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
+            updateJob(job.id, { status: "completed", result: { b64_json: videoBase64, revised_prompt: prompt } });
+            await updateJobInDb(job.id, { status: "completed", result_b64_json: videoBase64, result_revised_prompt: prompt || "" });
+          } else {
+            updateJob(job.id, { status: "completed", result: { url: videoUrl, revised_prompt: prompt } });
+            await updateJobInDb(job.id, { status: "completed", result_url: videoUrl, result_revised_prompt: prompt || "" });
+          }
+          logger_default.info(`Job ${job.id}: completed, url: ${videoUrl}`);
+        } catch (err) {
+          const message = (err == null ? void 0 : err.message) || String(err);
+          updateJob(job.id, { status: "failed", error: message });
+          await updateJobInDb(job.id, { status: "failed", error_message: message });
+          logger_default.error(`Job ${job.id}: failed - ${message}`);
+        }
+      })();
+      return new Response({
+        id: job.id,
+        status: job.status,
+        created: job.created
+      }, { statusCode: 202 });
+    },
+    // ========== 2. International Sync → now async with PostgreSQL ==========
+    "/international/generations": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      const allowedModels = [
+        "seedance-2.0-fast",
+        "seedance-2.0-pro",
+        "jimeng-video-seedance-2.0-fast",
+        "jimeng-video-seedance-2.0",
+        "jimeng-video-seedance-2.0-fast-vip",
+        "seedance-2.0-fast-vip",
+        "jimeng-video-seedance-2.0-vip",
+        "seedance-2.0-vip",
+        "jimeng-video-3.5-pro",
+        "jimeng-video-3.0",
+        "jimeng-video-3.0-pro"
+      ];
+      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
+      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
+        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
+      );
+      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.response_format", (v) => _16.isUndefined(v) || _16.isString(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model,
+        prompt = "",
+        ratio,
+        resolution = "720p",
+        duration,
+        file_paths = [],
+        filePaths = [],
+        response_format = "url"
+      } = request2.body;
+      const isSeedance = isInternationalSeedanceModel(model);
+      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
+        throw new Error("Invalid duration parameter");
+      }
+      if (isSeedance) {
+        if (finalDuration < 4 || finalDuration > 15) {
+          throw new Error("International Seedance model duration supports 4-15 seconds only");
+        }
+        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
+          throw new Error("International Seedance requires at least one material: keyed multipart file, keyed URL field, or file_paths/filePaths");
+        }
+      } else if (isInternationalVideoModel(model)) {
+        if (finalDuration !== 5 && finalDuration !== 10) {
+          throw new Error("International video model duration supports 5 or 10 seconds only");
+        }
+      } else {
+        throw new Error(`International endpoint does not support model: ${model}`);
+      }
+      const memBlock = checkMemoryGate();
+      if (memBlock) return memBlock;
+      const job = createJob();
+      logger_default.info(`Job ${job.id}: created for international model=${model}`);
+      (async () => {
+        try {
+          updateJob(job.id, { status: "processing" });
+          await updateJobInDb(job.id, {
+            status: "processing",
+            model,
+            prompt: prompt || "",
+            response_format,
+            refresh_token: token
+          });
+          let videoUrl;
+          if (isSeedance) {
+            videoUrl = await generateInternationalSeedanceVideo(
+              model,
+              prompt,
+              { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, filesMap: request2.filesMap, body: request2.body },
+              token
+            );
+          } else {
+            videoUrl = await generateInternationalVideo(
+              model,
+              prompt,
+              { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request2.files },
+              token
+            );
+          }
+          if (response_format === "b64_json") {
+            const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
+            updateJob(job.id, { status: "completed", result: { b64_json: videoBase64, revised_prompt: prompt } });
+            await updateJobInDb(job.id, { status: "completed", result_b64_json: videoBase64, result_revised_prompt: prompt || "" });
+          } else {
+            updateJob(job.id, { status: "completed", result: { url: videoUrl, revised_prompt: prompt } });
+            await updateJobInDb(job.id, { status: "completed", result_url: videoUrl, result_revised_prompt: prompt || "" });
+          }
+          logger_default.info(`Job ${job.id}: completed, url: ${videoUrl}`);
+        } catch (err) {
+          const message = (err == null ? void 0 : err.message) || String(err);
+          updateJob(job.id, { status: "failed", error: message });
+          await updateJobInDb(job.id, { status: "failed", error_message: message });
+          logger_default.error(`Job ${job.id}: failed - ${message}`);
+        }
+      })();
+      return new Response({
+        id: job.id,
+        status: job.status,
+        created: job.created
+      }, { statusCode: 202 });
+    },
+    // ========== 3. International Async → upstream logic + PostgreSQL ==========
+    "/international/generations/async": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      const allowedModels = [
+        "seedance-2.0-fast",
+        "seedance-2.0-pro",
+        "jimeng-video-seedance-2.0-fast",
+        "jimeng-video-seedance-2.0",
+        "jimeng-video-seedance-2.0-fast-vip",
+        "seedance-2.0-fast-vip",
+        "jimeng-video-seedance-2.0-vip",
+        "seedance-2.0-vip",
+        "jimeng-video-3.5-pro",
+        "jimeng-video-3.0",
+        "jimeng-video-3.0-pro"
+      ];
+      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
+      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
+        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
+      );
+      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model,
+        prompt = "",
+        ratio,
+        resolution = "720p",
+        duration,
+        file_paths = [],
+        filePaths = []
+      } = request2.body;
+      const isSeedance = isInternationalSeedanceModel(model);
+      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
+        throw new Error("Invalid duration parameter");
+      }
+      if (isSeedance) {
+        if (finalDuration < 4 || finalDuration > 15) {
+          throw new Error("International Seedance model duration supports 4-15 seconds only");
+        }
+        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
+          throw new Error("International Seedance requires at least one material");
+        }
+      } else if (isInternationalVideoModel(model)) {
+        if (finalDuration !== 5 && finalDuration !== 10) {
+          throw new Error("International video model duration supports 5 or 10 seconds only");
+        }
+      } else {
+        throw new Error(`International endpoint does not support model: ${model}`);
+      }
+      const job = createJob();
+      await updateJobInDb(job.id, { status: "processing", model, prompt: prompt || "", refresh_token: token });
+      logger_default.info(`Job ${job.id}: created for intl async model=${model}`);
+      const taskId = submitInternationalAsyncVideoTask(
+        model,
+        prompt,
+        { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request2.files, filesMap: request2.filesMap, body: request2.body },
+        token
+      );
+      await updateJobInDb(job.id, { jimeng_history_id: taskId });
+      (async () => {
+        const MAX_POLL = 300;
+        const POLL_INTERVAL = 1e4;
+        for (let i = 0; i < MAX_POLL; i++) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+          try {
+            const task = await queryAsyncVideoTask(taskId);
+            if (task.status === "succeeded") {
+              updateJob(job.id, { status: "completed", result: { url: task.result.url, revised_prompt: task.result.revised_prompt } });
+              await updateJobInDb(job.id, { status: "completed", result_url: task.result.url, result_revised_prompt: task.result.revised_prompt || "" });
+              logger_default.info(`Job ${job.id}: intl async completed, url: ${task.result.url}`);
+              return;
+            } else if (task.status === "failed") {
+              updateJob(job.id, { status: "failed", error: task.error });
+              await updateJobInDb(job.id, { status: "failed", error_message: task.error || "Unknown error" });
+              logger_default.error(`Job ${job.id}: intl async failed - ${task.error}`);
+              return;
+            }
+          } catch (err) {
+            logger_default.warn(`Job ${job.id}: intl async poll error: ${err.message}`);
+          }
+        }
+        updateJob(job.id, { status: "failed", error: "Async task timed out" });
+        await updateJobInDb(job.id, { status: "failed", error_message: "Async task timed out" });
+      })();
+      return {
+        created: util_default.unixTimestamp(),
+        id: job.id,
+        task_id: taskId,
+        status: "processing",
+        message: "Task submitted. Query status via GET /v1/videos/jobs/{id} or GET /v1/videos/international/generations/async/{task_id}"
+      };
+    },
+    // ========== 4. Domestic Async → upstream logic + PostgreSQL ==========
+    "/generations/async": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      request2.validate("body.model", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.duration", (v) => {
+        if (_16.isUndefined(v)) return true;
+        if (isMultiPart && typeof v === "string") {
+          const num = parseInt(v);
+          return num >= 4 && num <= 15 || num === 5 || num === 10;
+        }
+        return _16.isFinite(v) && (v >= 4 && v <= 15 || v === 5 || v === 10);
+      }).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model = DEFAULT_MODEL2,
+        prompt,
+        ratio = "1:1",
+        resolution = "720p",
+        duration = 5,
+        file_paths = [],
+        filePaths = []
+      } = request2.body;
+      const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      const job = createJob();
+      await updateJobInDb(job.id, { status: "processing", model, prompt: prompt || "", refresh_token: token });
+      logger_default.info(`Job ${job.id}: created for domestic async model=${model}`);
+      const taskId = submitAsyncVideoTask(
+        model,
+        prompt,
+        { ratio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request2.files },
+        token
+      );
+      await updateJobInDb(job.id, { jimeng_history_id: taskId });
+      (async () => {
+        const MAX_POLL = 300;
+        const POLL_INTERVAL = 1e4;
+        for (let i = 0; i < MAX_POLL; i++) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+          try {
+            const task = await queryAsyncVideoTask(taskId);
+            if (task.status === "succeeded") {
+              updateJob(job.id, { status: "completed", result: { url: task.result.url, revised_prompt: task.result.revised_prompt } });
+              await updateJobInDb(job.id, { status: "completed", result_url: task.result.url, result_revised_prompt: task.result.revised_prompt || "" });
+              logger_default.info(`Job ${job.id}: domestic async completed, url: ${task.result.url}`);
+              return;
+            } else if (task.status === "failed") {
+              updateJob(job.id, { status: "failed", error: task.error });
+              await updateJobInDb(job.id, { status: "failed", error_message: task.error || "Unknown error" });
+              logger_default.error(`Job ${job.id}: domestic async failed - ${task.error}`);
+              return;
+            }
+          } catch (err) {
+            logger_default.warn(`Job ${job.id}: domestic async poll error: ${err.message}`);
+          }
+        }
+        updateJob(job.id, { status: "failed", error: "Async task timed out" });
+        await updateJobInDb(job.id, { status: "failed", error_message: "Async task timed out" });
+      })();
+      return {
+        created: util_default.unixTimestamp(),
+        id: job.id,
+        task_id: taskId,
+        status: "processing",
+        message: "Task submitted. Query status via GET /v1/videos/jobs/{id} or GET /v1/videos/generations/async/{task_id}"
+      };
+    }
+  },
+  get: {
+    // ========== International async task status (upstream compat) ==========
+    "/international/generations/async/:taskId": async (request2) => {
+      const { taskId } = request2.params;
+      if (!taskId) {
+        throw new Error("Missing task_id parameter");
+      }
+      const task = await queryAsyncVideoTask(taskId);
+      if (task.status === "succeeded") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "succeeded",
+          data: [{
+            url: task.result.url,
+            revised_prompt: task.result.revised_prompt
+          }]
+        };
+      } else if (task.status === "failed") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "failed",
+          error: task.error
+        };
+      } else {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: task.status,
+          message: "Task is processing"
+        };
+      }
+    },
+    // ========== Domestic async task status (upstream compat) ==========
+    "/generations/async/:taskId": async (request2) => {
+      const { taskId } = request2.params;
+      if (!taskId) {
+        throw new Error("Missing task_id parameter");
+      }
+      const task = await queryAsyncVideoTask(taskId);
+      if (task.status === "succeeded") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "succeeded",
+          data: [{
+            url: task.result.url,
+            revised_prompt: task.result.revised_prompt
+          }]
+        };
+      } else if (task.status === "failed") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "failed",
+          error: task.error
+        };
+      } else {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: task.status,
+          message: "Task is processing"
+        };
+      }
+    }
+  }
+};
+
+// src/api/routes/video.ts
+var video_default = {
+  ...videos_default,
+  prefix: "/v1/video"
+};
 
 // src/api/routes/video-jobs.ts
 var video_jobs_default = {

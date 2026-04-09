@@ -1,10 +1,43 @@
 import _ from 'lodash';
+import os from 'os';
 
 import Request from '@/lib/request/Request.ts';
 import Response from '@/lib/response/Response.ts';
 import { tokenSplit } from '@/api/controllers/core.ts';
-import { generateVideo, generateSeedanceVideo, generateInternationalVideo, generateInternationalSeedanceVideo, isSeedanceModel, isInternationalSeedanceModel, isInternationalVideoModel, DEFAULT_MODEL, submitAsyncVideoTask, queryAsyncVideoTask, submitInternationalAsyncVideoTask } from '@/api/controllers/videos.ts';
+import {
+    generateVideo,
+    generateSeedanceVideo,
+    generateInternationalVideo,
+    generateInternationalSeedanceVideo,
+    isSeedanceModel,
+    isInternationalSeedanceModel,
+    isInternationalVideoModel,
+    DEFAULT_MODEL,
+    submitAsyncVideoTask,
+    submitInternationalAsyncVideoTask,
+    queryAsyncVideoTask,
+} from '@/api/controllers/videos.ts';
+import { createJob, updateJob } from '@/lib/job-store.ts';
+import { saveJobToDb, updateJobInDb } from '@/lib/db.ts';
 import util from '@/lib/util.ts';
+import logger from '@/lib/logger.ts';
+
+const MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
+
+/**
+ * Helper: check memory and return 503 if too low
+ */
+function checkMemoryGate(): Response | null {
+    const freeMB = Math.round(os.freemem() / 1024 / 1024);
+    if (freeMB < MEMORY_GATE_MB) {
+        logger.warn(`VideoRoute: memory gate triggered - ${freeMB}MB free, need ${MEMORY_GATE_MB}MB, rejecting job`);
+        return new Response(
+            { error: { message: `Service temporarily unavailable: low memory (${freeMB}MB free). Please retry in 60 seconds.`, type: 'server_error', code: 'service_unavailable' } },
+            { statusCode: 503, headers: { 'Retry-After': '60' } }
+        );
+    }
+    return null;
+}
 
 export default {
 
@@ -12,14 +45,14 @@ export default {
 
     post: {
 
+        // ========== 1. Domestic Sync → now async with PostgreSQL ==========
         '/generations': async (request: Request) => {
-            // 检查是否使用了不支持的参数
             const unsupportedParams = ['size', 'width', 'height'];
             const bodyKeys = Object.keys(request.body);
             const foundUnsupported = unsupportedParams.filter(param => bodyKeys.includes(param));
 
             if (foundUnsupported.length > 0) {
-                throw new Error(`不支持的参数: ${foundUnsupported.join(', ')}。请使用 ratio 和 resolution 参数控制视频尺寸。`);
+                throw new Error(`Unsupported parameters: ${foundUnsupported.join(', ')}. Use ratio and resolution to control video dimensions.`);
             }
 
             const contentType = request.headers['content-type'] || '';
@@ -32,14 +65,10 @@ export default {
                 .validate('body.resolution', v => _.isUndefined(v) || _.isString(v))
                 .validate('body.duration', v => {
                     if (_.isUndefined(v)) return true;
-                    // 对于 multipart/form-data，允许字符串类型的数字
                     if (isMultiPart && typeof v === 'string') {
                         const num = parseInt(v);
-                        // Seedance 支持 4-15 秒连续范围，普通视频支持 5 或 10 秒
                         return (num >= 4 && num <= 15) || num === 5 || num === 10;
                     }
-                    // 对于 JSON，要求数字类型
-                    // Seedance 支持 4-15 秒连续范围，普通视频支持 5 或 10 秒
                     return _.isFinite(v) && ((v >= 4 && v <= 15) || v === 5 || v === 10);
                 })
                 .validate('body.file_paths', v => _.isUndefined(v) || _.isArray(v))
@@ -47,9 +76,7 @@ export default {
                 .validate('body.response_format', v => _.isUndefined(v) || _.isString(v))
                 .validate('headers.authorization', _.isString);
 
-            // refresh_token切分
             const tokens = tokenSplit(request.headers.authorization);
-            // 随机挑选一个refresh_token
             const token = _.sample(tokens);
 
             const {
@@ -63,79 +90,80 @@ export default {
                 response_format = "url"
             } = request.body;
 
-            // 如果是 multipart/form-data，需要将字符串转换为数字
             const finalDuration = isMultiPart && typeof duration === 'string'
                 ? parseInt(duration)
                 : duration;
-
-            // 兼容两种参数名格式：file_paths 和 filePaths
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
 
-            // 根据模型类型选择不同的生成函数
-            let videoUrl: string;
-            if (isSeedanceModel(model)) {
-                // Seedance 2.0 多图智能视频生成
-                // Seedance 默认时长为 4 秒，默认比例为 4:3
-                const seedanceDuration = finalDuration === 5 ? 4 : finalDuration; // 如果是默认的5秒，转为4秒
-                const seedanceRatio = ratio === "1:1" ? "4:3" : ratio; // 如果是默认的1:1，转为4:3
+            // Memory gate
+            const memBlock = checkMemoryGate();
+            if (memBlock) return memBlock;
 
-                videoUrl = await generateSeedanceVideo(
-                    model,
-                    prompt,
-                    {
-                        ratio: seedanceRatio,
-                        resolution,
-                        duration: seedanceDuration,
-                        filePaths: finalFilePaths,
-                        files: request.files,
-                    },
-                    token
-                );
-            } else {
-                // 普通视频生成
-                videoUrl = await generateVideo(
-                    model,
-                    prompt,
-                    {
-                        ratio,
-                        resolution,
-                        duration: finalDuration,
-                        filePaths: finalFilePaths,
-                        files: request.files,
-                    },
-                    token
-                );
-            }
+            // Create job in memory + PostgreSQL
+            const job = createJob();
+            const freeMB = Math.round(os.freemem() / 1024 / 1024);
+            logger.info(`Job ${job.id}: created for domestic model=${model} (memory: ${freeMB}MB free)`);
 
-            // 根据response_format返回不同格式的结果
-            if (response_format === "b64_json") {
-                // 获取视频内容并转换为BASE64
-                const videoBase64 = await util.fetchFileBASE64(videoUrl);
-                return {
-                    created: util.unixTimestamp(),
-                    data: [{
-                        b64_json: videoBase64,
-                        revised_prompt: prompt
-                    }]
-                };
-            } else {
-                // 默认返回URL
-                return {
-                    created: util.unixTimestamp(),
-                    data: [{
-                        url: videoUrl,
-                        revised_prompt: prompt
-                    }]
-                };
-            }
+            // Background processing
+            (async () => {
+                try {
+                    updateJob(job.id, { status: 'processing' });
+                    await updateJobInDb(job.id, {
+                        status: 'processing',
+                        model,
+                        prompt: prompt || '',
+                        response_format,
+                        refresh_token: token,
+                    });
+
+                    let videoUrl: string;
+                    if (isSeedanceModel(model)) {
+                        const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
+                        const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
+                        videoUrl = await generateSeedanceVideo(
+                            model, prompt,
+                            { ratio: seedanceRatio, resolution, duration: seedanceDuration, filePaths: finalFilePaths, files: request.files },
+                            token
+                        );
+                    } else {
+                        videoUrl = await generateVideo(
+                            model, prompt,
+                            { ratio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request.files },
+                            token
+                        );
+                    }
+
+                    if (response_format === "b64_json") {
+                        const videoBase64 = await util.fetchFileBASE64(videoUrl);
+                        updateJob(job.id, { status: 'completed', result: { b64_json: videoBase64, revised_prompt: prompt } });
+                        await updateJobInDb(job.id, { status: 'completed', result_b64_json: videoBase64, result_revised_prompt: prompt || '' });
+                    } else {
+                        updateJob(job.id, { status: 'completed', result: { url: videoUrl, revised_prompt: prompt } });
+                        await updateJobInDb(job.id, { status: 'completed', result_url: videoUrl, result_revised_prompt: prompt || '' });
+                    }
+                    logger.info(`Job ${job.id}: completed, url: ${videoUrl}`);
+                } catch (err: any) {
+                    const message = err?.message || String(err);
+                    updateJob(job.id, { status: 'failed', error: message });
+                    await updateJobInDb(job.id, { status: 'failed', error_message: message });
+                    logger.error(`Job ${job.id}: failed - ${message}`);
+                }
+            })();
+
+            return new Response({
+                id: job.id,
+                status: job.status,
+                created: job.created
+            }, { statusCode: 202 });
         },
 
-        // ========== 异步视频生成接口：提交任务 ==========
+        // ========== 2. International Sync → now async with PostgreSQL ==========
         '/international/generations': async (request: Request) => {
             const contentType = request.headers['content-type'] || '';
             const isMultiPart = contentType.startsWith('multipart/form-data');
             const allowedModels = [
-                'seedance-2.0-fast', 'seedance-2.0-pro', 'jimeng-video-seedance-2.0-fast', 'jimeng-video-seedance-2.0', 'jimeng-video-seedance-2.0-fast-vip', 'seedance-2.0-fast-vip', 'jimeng-video-seedance-2.0-vip', 'seedance-2.0-vip',
+                'seedance-2.0-fast', 'seedance-2.0-pro', 'jimeng-video-seedance-2.0-fast', 'jimeng-video-seedance-2.0',
+                'jimeng-video-seedance-2.0-fast-vip', 'seedance-2.0-fast-vip', 'jimeng-video-seedance-2.0-vip', 'seedance-2.0-vip',
                 'jimeng-video-3.5-pro', 'jimeng-video-3.0', 'jimeng-video-3.0-pro'
             ];
             const hasKeyedUrlFields = Object.keys(request.body || {}).some(key => (
@@ -178,73 +206,89 @@ export default {
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
 
             if (!_.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
-                throw new Error('duration 参数无效');
+                throw new Error('Invalid duration parameter');
             }
             if (isSeedance) {
                 if (finalDuration < 4 || finalDuration > 15) {
-                    throw new Error('国际 Seedance 模型 duration 仅支持 4-15 秒');
+                    throw new Error('International Seedance model duration supports 4-15 seconds only');
                 }
                 if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
-                    throw new Error('国际 Seedance 接口至少需要一个素材：keyed multipart 文件、keyed URL 字段或 file_paths/filePaths');
+                    throw new Error('International Seedance requires at least one material: keyed multipart file, keyed URL field, or file_paths/filePaths');
                 }
-            } else {
-                if (finalDuration !== 5 && finalDuration !== 10) {
-                    throw new Error('国际普通视频模型 duration 仅支持 5 或 10 秒');
-                }
-            }
-
-            let videoUrl: string;
-            if (isSeedance) {
-                videoUrl = await generateInternationalSeedanceVideo(
-                    model,
-                    prompt,
-                    {
-                        ratio: finalRatio,
-                        resolution,
-                        duration: finalDuration,
-                        filePaths: finalFilePaths,
-                        filesMap: request.filesMap,
-                        body: request.body,
-                    },
-                    token
-                );
             } else if (isInternationalVideoModel(model)) {
-                videoUrl = await generateInternationalVideo(
-                    model,
-                    prompt,
-                    {
-                        ratio: finalRatio,
-                        resolution,
-                        duration: finalDuration,
-                        filePaths: finalFilePaths,
-                        files: request.files,
-                    },
-                    token
-                );
+                if (finalDuration !== 5 && finalDuration !== 10) {
+                    throw new Error('International video model duration supports 5 or 10 seconds only');
+                }
             } else {
-                throw new Error(`国际接口暂不支持模型: ${model}`);
+                throw new Error(`International endpoint does not support model: ${model}`);
             }
 
-            if (response_format === 'b64_json') {
-                const videoBase64 = await util.fetchFileBASE64(videoUrl);
-                return {
-                    created: util.unixTimestamp(),
-                    data: [{ b64_json: videoBase64, revised_prompt: prompt }]
-                };
-            }
+            // Memory gate
+            const memBlock = checkMemoryGate();
+            if (memBlock) return memBlock;
 
-            return {
-                created: util.unixTimestamp(),
-                data: [{ url: videoUrl, revised_prompt: prompt }]
-            };
+            // Create job in memory + PostgreSQL
+            const job = createJob();
+            logger.info(`Job ${job.id}: created for international model=${model}`);
+
+            // Background processing
+            (async () => {
+                try {
+                    updateJob(job.id, { status: 'processing' });
+                    await updateJobInDb(job.id, {
+                        status: 'processing',
+                        model,
+                        prompt: prompt || '',
+                        response_format,
+                        refresh_token: token,
+                    });
+
+                    let videoUrl: string;
+                    if (isSeedance) {
+                        videoUrl = await generateInternationalSeedanceVideo(
+                            model, prompt,
+                            { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, filesMap: request.filesMap, body: request.body },
+                            token
+                        );
+                    } else {
+                        videoUrl = await generateInternationalVideo(
+                            model, prompt,
+                            { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request.files },
+                            token
+                        );
+                    }
+
+                    if (response_format === 'b64_json') {
+                        const videoBase64 = await util.fetchFileBASE64(videoUrl);
+                        updateJob(job.id, { status: 'completed', result: { b64_json: videoBase64, revised_prompt: prompt } });
+                        await updateJobInDb(job.id, { status: 'completed', result_b64_json: videoBase64, result_revised_prompt: prompt || '' });
+                    } else {
+                        updateJob(job.id, { status: 'completed', result: { url: videoUrl, revised_prompt: prompt } });
+                        await updateJobInDb(job.id, { status: 'completed', result_url: videoUrl, result_revised_prompt: prompt || '' });
+                    }
+                    logger.info(`Job ${job.id}: completed, url: ${videoUrl}`);
+                } catch (err: any) {
+                    const message = err?.message || String(err);
+                    updateJob(job.id, { status: 'failed', error: message });
+                    await updateJobInDb(job.id, { status: 'failed', error_message: message });
+                    logger.error(`Job ${job.id}: failed - ${message}`);
+                }
+            })();
+
+            return new Response({
+                id: job.id,
+                status: job.status,
+                created: job.created
+            }, { statusCode: 202 });
         },
 
-        // ========== 国际版异步视频生成接口：提交任务 ==========
+        // ========== 3. International Async → upstream logic + PostgreSQL ==========
         '/international/generations/async': async (request: Request) => {
             const contentType = request.headers['content-type'] || '';
             const isMultiPart = contentType.startsWith('multipart/form-data');
             const allowedModels = [
-                'seedance-2.0-fast', 'seedance-2.0-pro', 'jimeng-video-seedance-2.0-fast', 'jimeng-video-seedance-2.0', 'jimeng-video-seedance-2.0-fast-vip', 'seedance-2.0-fast-vip', 'jimeng-video-seedance-2.0-vip', 'seedance-2.0-vip',
+                'seedance-2.0-fast', 'seedance-2.0-pro', 'jimeng-video-seedance-2.0-fast', 'jimeng-video-seedance-2.0',
+                'jimeng-video-seedance-2.0-fast-vip', 'seedance-2.0-fast-vip', 'jimeng-video-seedance-2.0-vip', 'seedance-2.0-vip',
                 'jimeng-video-3.5-pro', 'jimeng-video-3.0', 'jimeng-video-3.0-pro'
             ];
             const hasKeyedUrlFields = Object.keys(request.body || {}).some(key => (
@@ -285,46 +329,76 @@ export default {
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
 
             if (!_.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
-                throw new Error('duration 参数无效');
+                throw new Error('Invalid duration parameter');
             }
             if (isSeedance) {
                 if (finalDuration < 4 || finalDuration > 15) {
-                    throw new Error('国际 Seedance 模型 duration 仅支持 4-15 秒');
+                    throw new Error('International Seedance model duration supports 4-15 seconds only');
                 }
                 if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
-                    throw new Error('国际 Seedance 接口至少需要一个素材：keyed multipart 文件、keyed URL 字段或 file_paths/filePaths');
+                    throw new Error('International Seedance requires at least one material');
                 }
             } else if (isInternationalVideoModel(model)) {
                 if (finalDuration !== 5 && finalDuration !== 10) {
-                    throw new Error('国际普通视频模型 duration 仅支持 5 或 10 秒');
+                    throw new Error('International video model duration supports 5 or 10 seconds only');
                 }
             } else {
-                throw new Error(`国际接口暂不支持模型: ${model}`);
+                throw new Error(`International endpoint does not support model: ${model}`);
             }
 
+            // Create PostgreSQL job alongside upstream async task
+            const job = createJob();
+            await updateJobInDb(job.id, { status: 'processing', model, prompt: prompt || '', refresh_token: token });
+            logger.info(`Job ${job.id}: created for intl async model=${model}`);
+
+            // Submit upstream async task (in-memory + file storage)
             const taskId = submitInternationalAsyncVideoTask(
-                model,
-                prompt,
-                {
-                    ratio: finalRatio,
-                    resolution,
-                    duration: finalDuration,
-                    filePaths: finalFilePaths,
-                    files: request.files,
-                    filesMap: request.filesMap,
-                    body: request.body,
-                },
+                model, prompt,
+                { ratio: finalRatio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request.files, filesMap: request.filesMap, body: request.body },
                 token
             );
 
+            // Link the upstream taskId in the DB for cross-reference
+            await updateJobInDb(job.id, { jimeng_history_id: taskId });
+
+            // Background: poll upstream task and sync results to PostgreSQL
+            (async () => {
+                const MAX_POLL = 300;
+                const POLL_INTERVAL = 10_000;
+                for (let i = 0; i < MAX_POLL; i++) {
+                    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+                    try {
+                        const task = await queryAsyncVideoTask(taskId);
+                        if (task.status === 'succeeded') {
+                            updateJob(job.id, { status: 'completed', result: { url: task.result.url, revised_prompt: task.result.revised_prompt } });
+                            await updateJobInDb(job.id, { status: 'completed', result_url: task.result.url, result_revised_prompt: task.result.revised_prompt || '' });
+                            logger.info(`Job ${job.id}: intl async completed, url: ${task.result.url}`);
+                            return;
+                        } else if (task.status === 'failed') {
+                            updateJob(job.id, { status: 'failed', error: task.error });
+                            await updateJobInDb(job.id, { status: 'failed', error_message: task.error || 'Unknown error' });
+                            logger.error(`Job ${job.id}: intl async failed - ${task.error}`);
+                            return;
+                        }
+                    } catch (err: any) {
+                        logger.warn(`Job ${job.id}: intl async poll error: ${err.message}`);
+                    }
+                }
+                // Timeout
+                updateJob(job.id, { status: 'failed', error: 'Async task timed out' });
+                await updateJobInDb(job.id, { status: 'failed', error_message: 'Async task timed out' });
+            })();
+
             return {
                 created: util.unixTimestamp(),
+                id: job.id,
                 task_id: taskId,
                 status: "processing",
-                message: "任务已提交，请使用 GET /v1/videos/international/generations/async/{task_id} 查询结果",
+                message: "Task submitted. Query status via GET /v1/videos/jobs/{id} or GET /v1/videos/international/generations/async/{task_id}",
             };
         },
 
+        // ========== 4. Domestic Async → upstream logic + PostgreSQL ==========
         '/generations/async': async (request: Request) => {
             const contentType = request.headers['content-type'] || '';
             const isMultiPart = contentType.startsWith('multipart/form-data');
@@ -346,7 +420,6 @@ export default {
                 .validate('body.filePaths', v => _.isUndefined(v) || _.isArray(v))
                 .validate('headers.authorization', _.isString);
 
-            // refresh_token切分
             const tokens = tokenSplit(request.headers.authorization);
             const token = _.sample(tokens);
 
@@ -363,28 +436,56 @@ export default {
             const finalDuration = isMultiPart && typeof duration === 'string'
                 ? parseInt(duration)
                 : duration;
-
             const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
 
-            // 提交异步任务，立即返回 taskId
+            // Create PostgreSQL job alongside upstream async task
+            const job = createJob();
+            await updateJobInDb(job.id, { status: 'processing', model, prompt: prompt || '', refresh_token: token });
+            logger.info(`Job ${job.id}: created for domestic async model=${model}`);
+
+            // Submit upstream async task
             const taskId = submitAsyncVideoTask(
-                model,
-                prompt,
-                {
-                    ratio,
-                    resolution,
-                    duration: finalDuration,
-                    filePaths: finalFilePaths,
-                    files: request.files,
-                },
+                model, prompt,
+                { ratio, resolution, duration: finalDuration, filePaths: finalFilePaths, files: request.files },
                 token
             );
 
+            // Link the upstream taskId in the DB
+            await updateJobInDb(job.id, { jimeng_history_id: taskId });
+
+            // Background: poll upstream task and sync results to PostgreSQL
+            (async () => {
+                const MAX_POLL = 300;
+                const POLL_INTERVAL = 10_000;
+                for (let i = 0; i < MAX_POLL; i++) {
+                    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+                    try {
+                        const task = await queryAsyncVideoTask(taskId);
+                        if (task.status === 'succeeded') {
+                            updateJob(job.id, { status: 'completed', result: { url: task.result.url, revised_prompt: task.result.revised_prompt } });
+                            await updateJobInDb(job.id, { status: 'completed', result_url: task.result.url, result_revised_prompt: task.result.revised_prompt || '' });
+                            logger.info(`Job ${job.id}: domestic async completed, url: ${task.result.url}`);
+                            return;
+                        } else if (task.status === 'failed') {
+                            updateJob(job.id, { status: 'failed', error: task.error });
+                            await updateJobInDb(job.id, { status: 'failed', error_message: task.error || 'Unknown error' });
+                            logger.error(`Job ${job.id}: domestic async failed - ${task.error}`);
+                            return;
+                        }
+                    } catch (err: any) {
+                        logger.warn(`Job ${job.id}: domestic async poll error: ${err.message}`);
+                    }
+                }
+                updateJob(job.id, { status: 'failed', error: 'Async task timed out' });
+                await updateJobInDb(job.id, { status: 'failed', error_message: 'Async task timed out' });
+            })();
+
             return {
                 created: util.unixTimestamp(),
+                id: job.id,
                 task_id: taskId,
                 status: "processing",
-                message: "任务已提交，请使用 GET /v1/videos/generations/async/{task_id} 查询结果",
+                message: "Task submitted. Query status via GET /v1/videos/jobs/{id} or GET /v1/videos/generations/async/{task_id}",
             };
         },
 
@@ -392,11 +493,11 @@ export default {
 
     get: {
 
-        // ========== 国际版异步视频生成接口：查询结果 ==========
+        // ========== International async task status (upstream compat) ==========
         '/international/generations/async/:taskId': async (request: Request) => {
             const { taskId } = request.params;
             if (!taskId) {
-                throw new Error("缺少 task_id 参数");
+                throw new Error("Missing task_id parameter");
             }
 
             const task = await queryAsyncVideoTask(taskId);
@@ -423,16 +524,16 @@ export default {
                     created: util.unixTimestamp(),
                     task_id: task.taskId,
                     status: task.status,
-                    message: "任务处理中",
+                    message: "Task is processing",
                 };
             }
         },
 
-        // ========== 异步视频生成接口：查询结果 ==========
+        // ========== Domestic async task status (upstream compat) ==========
         '/generations/async/:taskId': async (request: Request) => {
             const { taskId } = request.params;
             if (!taskId) {
-                throw new Error("缺少 task_id 参数");
+                throw new Error("Missing task_id parameter");
             }
 
             const task = await queryAsyncVideoTask(taskId);
@@ -459,7 +560,7 @@ export default {
                     created: util.unixTimestamp(),
                     task_id: task.taskId,
                     status: task.status,
-                    message: "任务处理中",
+                    message: "Task is processing",
                 };
             }
         },
