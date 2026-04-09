@@ -1,0 +1,78 @@
+modules = ["nodejs-20", "web", "postgresql-16"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+packages = [
+  "glib",
+  "nss",
+  "nspr",
+  "atk",
+  "at-spi2-atk",
+  "cups",
+  "libdrm",
+  "gtk3",
+  "pango",
+  "cairo",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+  "mesa",
+  "expat",
+  "alsa-lib",
+  "dbus",
+  "at-spi2-core",
+  "xorg.libxshmfence",
+  "libxkbcommon",
+  "libgbm",
+  "wget",
+]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace && npm run start"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[deployment]
+deploymentTarget = "vm"
+run = [
+  "sh",
+  "-c",
+  "export PLAYWRIGHT_BROWSERS_PATH=/home/runner/workspace/playwright-browsers && if [ ! -d \"$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1208\" ]; then npx -y playwright@1.58.2 install chromium; fi && node --enable-source-maps --no-node-snapshot dist/index.js",
+]
+build = ["npm", "run", "build"]
+
+[userenv]
+
+[userenv.shared]
+
+[userenv.production]
+PLAYWRIGHT_BROWSERS_PATH = "/home/runner/workspace/playwright-browsers"

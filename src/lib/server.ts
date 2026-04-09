@@ -58,7 +58,7 @@ class Server {
                 return;
             }
             if (ctx.is('application/json') && ['POST', 'PUT', 'PATCH'].includes(ctx.method)) {
-                logger.debug('开始自定义 JSON 解析');
+                logger.debug('Starting custom JSON parse');
                 const chunks: Buffer[] = [];
 
                 await new Promise((resolve, reject) => {
@@ -86,7 +86,7 @@ class Server {
 
                 const parsedBody = JSON.parse(cleanedBody);
 
-                logger.debug('JSON 解析成功，跳过 koa-body');
+                logger.debug('Custom JSON parse successful, skipping koa-body');
 
                 ctx.request.body = parsedBody;
                 ctx.request.rawBody = cleanedBody;
@@ -143,7 +143,7 @@ class Server {
             logger.debug(`-> ${ctx.request.method} ${ctx.request.url} request is not supported - ${request.remoteIP || "unknown"}`);
             // const failureBody = new FailureBody(new Exception(EX.SYSTEM_NOT_ROUTE_MATCHING, "Request is not supported"));
             // const response = new Response(failureBody);
-            const message = `[请求有误]: 正确请求为 POST -> /v1/chat/completions，当前请求为 ${ctx.request.method} -> ${ctx.request.url} 请纠正`;
+            const message = `[Bad Request]: Expected POST -> /v1/chat/completions, got ${ctx.request.method} -> ${ctx.request.url}`;
             logger.warn(message);
             const failureBody = new FailureBody(new Error(message));
             const response = new Response(failureBody);
