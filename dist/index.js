@@ -675,9 +675,6 @@ var logger_default = new Logger();
 
 // src/lib/browser-service.ts
 import { chromium } from "playwright-core";
-import { execSync } from "child_process";
-import fs6 from "fs";
-import os2 from "os";
 
 // src/api/controllers/core.ts
 import _7 from "lodash";
@@ -752,13 +749,488 @@ var exceptions_default = {
   API_IMAGE_GENERATION_INSUFFICIENT_POINTS: [-2009, "\u5373\u68A6\u79EF\u5206\u4E0D\u8DB3"]
 };
 
+// src/lib/x-bogus.ts
+import { createHash } from "crypto";
+var SHIFT_ARRAY = "Dkdpgh4ZKsQB80/Mfvw36XI1R25-WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe";
+var MAGIC = 536919696;
+function md5Hex(input) {
+  return createHash("md5").update(input).digest("hex");
+}
+function md5Double(input) {
+  const first = createHash("md5").update(input).digest();
+  return createHash("md5").update(first).digest("hex");
+}
+function rc4Encrypt(plaintext, key) {
+  const sBox = Array.from({ length: 256 }, (_17, i) => i);
+  let j = 0;
+  for (let i = 0; i < 256; i++) {
+    j = j + sBox[i] + key[i % key.length] & 255;
+    [sBox[i], sBox[j]] = [sBox[j], sBox[i]];
+  }
+  let i2 = 0;
+  let j2 = 0;
+  let result = "";
+  for (let k = 0; k < plaintext.length; k++) {
+    i2 = i2 + 1 & 255;
+    j2 = j2 + sBox[i2] & 255;
+    [sBox[i2], sBox[j2]] = [sBox[j2], sBox[i2]];
+    const keystream = sBox[sBox[i2] + sBox[j2] & 255];
+    result += String.fromCharCode(plaintext.charCodeAt(k) ^ keystream);
+  }
+  return result;
+}
+function b64Encode(input, alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=") {
+  const result = [];
+  for (let i = 0; i < input.length; i += 3) {
+    const num1 = input.charCodeAt(i);
+    const num2 = i + 1 < input.length ? input.charCodeAt(i + 1) : -1;
+    const num3 = i + 2 < input.length ? input.charCodeAt(i + 2) : -1;
+    const arr1 = num1 >> 2;
+    const arr2 = num2 >= 0 ? (3 & num1) << 4 | num2 >> 4 : (3 & num1) << 4;
+    const arr3 = num2 >= 0 ? (15 & num2) << 2 | num3 >> 6 : 64;
+    const arr4 = num3 >= 0 ? 63 & num3 : 64;
+    result.push(alphabet[arr1], alphabet[arr2], alphabet[arr3], alphabet[arr4]);
+  }
+  return result.join("");
+}
+function filterList(numList) {
+  const indices = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 4, 6, 8, 10, 12, 14, 16, 18, 20];
+  return indices.map((x) => numList[x - 1]);
+}
+function scramble(chars) {
+  const [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s] = chars;
+  return String.fromCharCode(
+    a,
+    k,
+    b,
+    l,
+    c,
+    m,
+    d,
+    n,
+    e,
+    o,
+    f,
+    p,
+    g,
+    q,
+    h,
+    r,
+    i,
+    s,
+    j
+  );
+}
+function computeChecksum(saltList) {
+  let cs = 64;
+  for (let i = 3; i < saltList.length; i++) {
+    cs ^= saltList[i];
+  }
+  return cs;
+}
+function xBogus(params, userAgent, timestamp, data = "") {
+  const md5Data = md5Double(data);
+  const md5Params = md5Double(params);
+  const rc4Ua = rc4Encrypt(userAgent, [0, 1, 14]);
+  const b64Ua = b64Encode(rc4Ua);
+  const md5Ua = md5Hex(b64Ua);
+  const md5ParamsBytes = Buffer.from(md5Params, "hex");
+  const md5DataBytes = Buffer.from(md5Data, "hex");
+  const md5UaBytes = Buffer.from(md5Ua, "hex");
+  const saltList = [
+    timestamp,
+    MAGIC,
+    64,
+    0,
+    1,
+    14,
+    md5ParamsBytes[md5ParamsBytes.length - 2],
+    md5ParamsBytes[md5ParamsBytes.length - 1],
+    md5DataBytes[md5DataBytes.length - 2],
+    md5DataBytes[md5DataBytes.length - 1],
+    md5UaBytes[md5UaBytes.length - 2],
+    md5UaBytes[md5UaBytes.length - 1]
+  ];
+  saltList.push(timestamp >> 24 & 255);
+  saltList.push(timestamp >> 16 & 255);
+  saltList.push(timestamp >> 8 & 255);
+  saltList.push(timestamp & 255);
+  saltList.push(saltList[1] >> 24 & 255);
+  saltList.push(saltList[1] >> 16 & 255);
+  saltList.push(saltList[1] >> 8 & 255);
+  saltList.push(saltList[1] & 255);
+  saltList.push(computeChecksum(saltList));
+  saltList.push(255);
+  const numList = filterList(saltList);
+  const rc4Result = rc4Encrypt(scramble(numList), [255]);
+  const prefixed = "\xFF" + rc4Result;
+  return b64Encode(prefixed, SHIFT_ARRAY);
+}
+function signXBogus(params, userAgent, data = "") {
+  const timestamp = Math.floor(Date.now() / 1e3);
+  const bogus = xBogus(params, userAgent, timestamp, data);
+  return params + "&X-Bogus=" + bogus;
+}
+
+// src/lib/x-gnarly.ts
+import { createHash as createHash2 } from "crypto";
+var CUSTOM_ALPHABET = "u09tbS3UvgDEe6r-ZVMXzLpsAohTn7mdINQlW412GqBjfYiyk8JORCF5/xKHwacP=";
+var MASK_32 = 4294967295;
+var CRYPTO_CONSTANTS = [
+  4294967295,
+  138,
+  1498001188,
+  211147047,
+  253,
+  null,
+  203,
+  288,
+  9,
+  1196819126,
+  3212677781,
+  135,
+  263,
+  193,
+  58,
+  18,
+  244,
+  2931180889,
+  240,
+  173,
+  268,
+  2157053261,
+  261,
+  175,
+  14,
+  5,
+  171,
+  270,
+  156,
+  258,
+  13,
+  15,
+  3732962506,
+  185,
+  169,
+  2,
+  6,
+  132,
+  162,
+  200,
+  3,
+  160,
+  217618912,
+  62,
+  2517678443,
+  44,
+  164,
+  4,
+  96,
+  183,
+  2903579748,
+  3863347763,
+  119,
+  181,
+  10,
+  190,
+  8,
+  2654435769,
+  259,
+  104,
+  230,
+  128,
+  2633865432,
+  225,
+  1,
+  257,
+  143,
+  179,
+  16,
+  600974999,
+  185100057,
+  32,
+  188,
+  53,
+  2718276124,
+  177,
+  196,
+  4294967296,
+  147,
+  117,
+  17,
+  49,
+  7,
+  28,
+  12,
+  266,
+  216,
+  11,
+  0,
+  45,
+  166,
+  247,
+  1451689750
+];
+var CHACHA_INITIAL_STATE = [
+  CRYPTO_CONSTANTS[9],
+  // 1196819126
+  CRYPTO_CONSTANTS[69],
+  // 600974999
+  CRYPTO_CONSTANTS[51],
+  // 2903579748
+  CRYPTO_CONSTANTS[92]
+  // 1451689750
+];
+function ensure32(value) {
+  return value & MASK_32;
+}
+function rotateLeft(value, shift) {
+  return ensure32(value << shift | value >>> 32 - shift);
+}
+function chachaQuarterRound(state, a, b, c, d) {
+  state[a] = ensure32(state[a] + state[b]);
+  state[d] = rotateLeft(state[d] ^ state[a], 16);
+  state[c] = ensure32(state[c] + state[d]);
+  state[b] = rotateLeft(state[b] ^ state[c], 12);
+  state[a] = ensure32(state[a] + state[b]);
+  state[d] = rotateLeft(state[d] ^ state[a], 8);
+  state[c] = ensure32(state[c] + state[d]);
+  state[b] = rotateLeft(state[b] ^ state[c], 7);
+}
+function chachaBlockFunction(initialState, numRounds) {
+  const working = [...initialState];
+  let roundCount = 0;
+  while (roundCount < numRounds) {
+    chachaQuarterRound(working, 0, 4, 8, 12);
+    chachaQuarterRound(working, 1, 5, 9, 13);
+    chachaQuarterRound(working, 2, 6, 10, 14);
+    chachaQuarterRound(working, 3, 7, 11, 15);
+    roundCount++;
+    if (roundCount >= numRounds) break;
+    chachaQuarterRound(working, 0, 5, 10, 15);
+    chachaQuarterRound(working, 1, 6, 11, 12);
+    chachaQuarterRound(working, 2, 7, 12, 13);
+    chachaQuarterRound(working, 3, 4, 13, 14);
+    roundCount++;
+  }
+  for (let i = 0; i < 16; i++) {
+    working[i] = ensure32(working[i] + initialState[i]);
+  }
+  return working;
+}
+var prngState = initializePrngState();
+var stateIndex = CRYPTO_CONSTANTS[88];
+function initializePrngState() {
+  const tsMs = Date.now();
+  return [
+    CRYPTO_CONSTANTS[44],
+    CRYPTO_CONSTANTS[74],
+    CRYPTO_CONSTANTS[10],
+    CRYPTO_CONSTANTS[62],
+    CRYPTO_CONSTANTS[42],
+    CRYPTO_CONSTANTS[17],
+    CRYPTO_CONSTANTS[2],
+    CRYPTO_CONSTANTS[21],
+    CRYPTO_CONSTANTS[3],
+    CRYPTO_CONSTANTS[70],
+    CRYPTO_CONSTANTS[50],
+    CRYPTO_CONSTANTS[32],
+    CRYPTO_CONSTANTS[0] & tsMs,
+    Math.floor(Math.random() * (CRYPTO_CONSTANTS[77] - 1)),
+    Math.floor(Math.random() * (CRYPTO_CONSTANTS[77] - 1)),
+    Math.floor(Math.random() * (CRYPTO_CONSTANTS[77] - 1))
+  ];
+}
+function generateRandomFloat() {
+  const blockOutput = chachaBlockFunction(prngState, 8);
+  const randomValue = blockOutput[stateIndex];
+  const highBits = (blockOutput[stateIndex + 8] & 4294967280) >>> 11;
+  if (stateIndex === 7) {
+    prngState[12] = ensure32(prngState[12] + 1);
+    stateIndex = 0;
+  } else {
+    stateIndex++;
+  }
+  return (randomValue + 4294967296 * highBits) / 2 ** 53;
+}
+function convertNumberToBytes(value) {
+  if (value < 255 * 255) {
+    return [value >> 8 & 255, value & 255];
+  }
+  return [
+    value >> 24 & 255,
+    value >> 16 & 255,
+    value >> 8 & 255,
+    value & 255
+  ];
+}
+function stringToBigEndianInt(input) {
+  const buf = Buffer.from(input.substring(0, 4), "utf-8");
+  let acc = 0;
+  for (const byte of buf) {
+    acc = (acc << 8 | byte) >>> 0;
+  }
+  return acc;
+}
+function chachaEncryptData(keyWords, rounds, data) {
+  const fullWordsCount = Math.floor(data.length / 4);
+  const remainingBytes = data.length % 4;
+  const totalWords = Math.ceil(data.length / 4);
+  const wordArray = new Int32Array(totalWords);
+  for (let i = 0; i < fullWordsCount; i++) {
+    const bi = 4 * i;
+    wordArray[i] = (data[bi] | data[bi + 1] << 8 | data[bi + 2] << 16 | data[bi + 3] << 24) >>> 0;
+  }
+  if (remainingBytes) {
+    let partial = 0;
+    const base = 4 * fullWordsCount;
+    for (let b = 0; b < remainingBytes; b++) {
+      partial |= data[base + b] << 8 * b;
+    }
+    wordArray[fullWordsCount] = partial;
+  }
+  const fullState = [...CHACHA_INITIAL_STATE, ...keyWords];
+  let wordOffset = 0;
+  while (wordOffset + 16 < wordArray.length) {
+    const keystream2 = chachaBlockFunction(fullState, rounds);
+    fullState[12] = ensure32(fullState[12] + 1);
+    for (let k = 0; k < 16; k++) {
+      wordArray[wordOffset + k] = (wordArray[wordOffset + k] ^ keystream2[k]) >>> 0;
+    }
+    wordOffset += 16;
+  }
+  const remaining = wordArray.length - wordOffset;
+  const keystream = chachaBlockFunction(fullState, rounds);
+  for (let k = 0; k < remaining; k++) {
+    wordArray[wordOffset + k] = (wordArray[wordOffset + k] ^ keystream[k]) >>> 0;
+  }
+  for (let i = 0; i < fullWordsCount; i++) {
+    const w = wordArray[i] >>> 0;
+    const bi = 4 * i;
+    data[bi] = w & 255;
+    data[bi + 1] = w >>> 8 & 255;
+    data[bi + 2] = w >>> 16 & 255;
+    data[bi + 3] = w >>> 24 & 255;
+  }
+  if (remainingBytes) {
+    const w = wordArray[fullWordsCount] >>> 0;
+    const base = 4 * fullWordsCount;
+    for (let b = 0; b < remainingBytes; b++) {
+      data[base + b] = w >>> 8 * b & 255;
+    }
+  }
+}
+function customBase64Encode(input) {
+  const result = [];
+  const fullBlockLength = Math.floor(input.length / 3) * 3;
+  for (let i = 0; i < fullBlockLength; i += 3) {
+    const block = input.charCodeAt(i) << 16 | input.charCodeAt(i + 1) << 8 | input.charCodeAt(i + 2);
+    result.push(
+      CUSTOM_ALPHABET[block >>> 18 & 63],
+      CUSTOM_ALPHABET[block >>> 12 & 63],
+      CUSTOM_ALPHABET[block >>> 6 & 63],
+      CUSTOM_ALPHABET[block & 63]
+    );
+  }
+  return result.join("");
+}
+function getXGnarly(queryString, requestBody, userAgent) {
+  prngState = initializePrngState();
+  stateIndex = 0;
+  const timestampMs = Date.now();
+  const md5Query = createHash2("md5").update(queryString).digest("hex");
+  const md5Body = createHash2("md5").update(requestBody).digest("hex");
+  const md5Ua = createHash2("md5").update(userAgent).digest("hex");
+  const dataObj = {};
+  const keyOrder = [];
+  function add(key, value) {
+    dataObj[key] = value;
+    if (!keyOrder.includes(key)) keyOrder.push(key);
+  }
+  add(1, 1);
+  add(2, 14);
+  add(3, md5Query);
+  add(4, md5Body);
+  add(5, md5Ua);
+  add(6, Math.floor(timestampMs / 1e3));
+  add(7, 1938040196);
+  add(8, timestampMs % 2147483648);
+  add(9, "5.1.2");
+  add(10, "1.0.0.316");
+  add(11, 1);
+  let checksum = 0;
+  for (let i = 1; i <= 11; i++) {
+    const val = dataObj[i];
+    const xorVal = typeof val === "number" ? val : stringToBigEndianInt(val);
+    checksum ^= xorVal;
+  }
+  add(12, ensure32(checksum));
+  let finalChecksum = 0;
+  for (const key of keyOrder) {
+    const val = dataObj[key];
+    if (typeof val === "number") {
+      finalChecksum ^= val;
+    }
+  }
+  add(0, ensure32(finalChecksum));
+  const payloadBytes = [];
+  payloadBytes.push(keyOrder.length);
+  for (const key of keyOrder) {
+    payloadBytes.push(key);
+    const val = dataObj[key];
+    const valBytes = typeof val === "number" ? convertNumberToBytes(val) : Array.from(Buffer.from(val, "utf-8"));
+    payloadBytes.push(...convertNumberToBytes(valBytes.length));
+    payloadBytes.push(...valBytes);
+  }
+  const baseString = String.fromCharCode(...payloadBytes);
+  const encryptionKeyWords = [];
+  const keyBytesArray = [];
+  let roundAccumulator = 0;
+  for (let i = 0; i < 12; i++) {
+    const rv = generateRandomFloat();
+    const wordValue = Math.floor(rv * 4294967296) >>> 0;
+    encryptionKeyWords.push(wordValue);
+    roundAccumulator = roundAccumulator + (wordValue & 15) & 15;
+    keyBytesArray.push(
+      wordValue & 255,
+      wordValue >>> 8 & 255,
+      wordValue >>> 16 & 255,
+      wordValue >>> 24 & 255
+    );
+  }
+  const encryptionRounds = roundAccumulator + 5;
+  const dataBuffer = Buffer.from(Array.from(baseString).map((c) => c.charCodeAt(0)));
+  const fullState = [...CHACHA_INITIAL_STATE, ...encryptionKeyWords];
+  chachaEncryptData(encryptionKeyWords, encryptionRounds, dataBuffer);
+  const encryptedData = String.fromCharCode(...dataBuffer);
+  let insertionPosition = 0;
+  for (const b of keyBytesArray) {
+    insertionPosition = (insertionPosition + b) % (encryptedData.length + 1);
+  }
+  for (let i = 0; i < encryptedData.length; i++) {
+    insertionPosition = (insertionPosition + encryptedData.charCodeAt(i)) % (encryptedData.length + 1);
+  }
+  const keyString = String.fromCharCode(...keyBytesArray);
+  const controlByte = String.fromCharCode((1 << 6 ^ 1 << 3 ^ 3) & 255);
+  const finalString = controlByte + encryptedData.substring(0, insertionPosition) + keyString + encryptedData.substring(insertionPosition);
+  return customBase64Encode(finalString);
+}
+
 // src/api/controllers/core.ts
 var DEFAULT_ASSISTANT_ID = 513695;
+var DEFAULT_ASSISTANT_ID_INTERNATIONAL = 513641;
 var VERSION_CODE = "8.4.0";
 var PLATFORM_CODE = "7";
 var DEVICE_ID = Math.random() * 1e18 + 7e18;
 var WEB_ID = Math.random() * 1e18 + 7e18;
 var USER_ID = util_default.uuid(false);
+var BASE_URL_CN = "https://jimeng.jianying.com";
+var BASE_URL_US_COMMERCE = "https://commerce.us.capcut.com";
+var BASE_URL_HK_COMMERCE = "https://commerce-api-sg.capcut.com";
+var BASE_URL_DREAMINA_US = "https://dreamina-api.us.capcut.com";
+var BASE_URL_DREAMINA_HK = "https://mweb-api-sg.capcut.com";
+var DA_VERSION = "3.3.9";
+var WEB_VERSION = "7.5.0";
 var FAKE_HEADERS = {
   Accept: "application/json, text/plain, */*",
   "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -783,22 +1255,73 @@ var FAKE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 };
 var FILE_MAX_SIZE = 100 * 1024 * 1024;
-async function acquireToken(refreshToken) {
-  return refreshToken;
+var INTERNATIONAL_REGION_MAP = {
+  hk: { region: "HK", lan: "en", loc: "hk" },
+  jp: { region: "JP", lan: "ja", loc: "jp" },
+  sg: { region: "SG", lan: "en", loc: "sg" },
+  al: { region: "AL", lan: "en", loc: "al" },
+  az: { region: "AZ", lan: "en", loc: "az" },
+  bh: { region: "BH", lan: "en", loc: "bh" },
+  ca: { region: "CA", lan: "en", loc: "ca" },
+  cl: { region: "CL", lan: "en", loc: "cl" },
+  de: { region: "DE", lan: "en", loc: "de" },
+  gb: { region: "GB", lan: "en", loc: "gb" },
+  gy: { region: "GY", lan: "en", loc: "gy" },
+  il: { region: "IL", lan: "en", loc: "il" },
+  iq: { region: "IQ", lan: "en", loc: "iq" },
+  it: { region: "IT", lan: "en", loc: "it" },
+  jo: { region: "JO", lan: "en", loc: "jo" },
+  kg: { region: "KG", lan: "en", loc: "kg" },
+  om: { region: "OM", lan: "en", loc: "om" },
+  pk: { region: "PK", lan: "en", loc: "pk" },
+  pt: { region: "PT", lan: "en", loc: "pt" },
+  sa: { region: "SA", lan: "en", loc: "sa" },
+  se: { region: "SE", lan: "en", loc: "se" },
+  tr: { region: "TR", lan: "en", loc: "tr" },
+  tz: { region: "TZ", lan: "en", loc: "tz" },
+  uz: { region: "UZ", lan: "en", loc: "uz" },
+  ve: { region: "VE", lan: "en", loc: "ve" },
+  xk: { region: "XK", lan: "en", loc: "xk" }
+};
+function parseRegionFromToken(refreshToken) {
+  const token = refreshToken.toLowerCase();
+  const isUS = token.startsWith("us-");
+  const prefixMatch = token.match(/^([a-z]{2})-/);
+  let regionCode = "CN";
+  let isInternational = false;
+  if (prefixMatch && INTERNATIONAL_REGION_MAP[prefixMatch[1]]) {
+    regionCode = INTERNATIONAL_REGION_MAP[prefixMatch[1]].region;
+    isInternational = true;
+  }
+  if (isUS) {
+    regionCode = "US";
+    isInternational = true;
+  }
+  return {
+    isUS,
+    regionCode,
+    isInternational,
+    isCN: !isInternational
+  };
+}
+function getAssistantId(regionInfo) {
+  if (regionInfo.isInternational) return DEFAULT_ASSISTANT_ID_INTERNATIONAL;
+  return DEFAULT_ASSISTANT_ID;
 }
 function generateCookie(refreshToken) {
+  const regionInfo = parseRegionFromToken(refreshToken);
+  const token = regionInfo.isInternational ? refreshToken.substring(3) : refreshToken;
   return [
     `_tea_web_id=${WEB_ID}`,
     `is_staff_user=false`,
-    `store-region=cn-gd`,
-    `store-region-src=uid`,
-    `sid_guard=${refreshToken}%7C${util_default.unixTimestamp()}%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT`,
+    ...regionInfo.isCN ? [`store-region=cn-gd`, `store-region-src=uid`] : [],
+    `sid_guard=${token}%7C${util_default.unixTimestamp()}%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT`,
     `uid_tt=${USER_ID}`,
     `uid_tt_ss=${USER_ID}`,
-    `sid_tt=${refreshToken}`,
-    `sessionid=${refreshToken}`,
-    `sessionid_ss=${refreshToken}`,
-    `sid_tt=${refreshToken}`
+    `sid_tt=${token}`,
+    `sessionid=${token}`,
+    `sessionid_ss=${token}`,
+    `sid_tt=${token}`
   ].join("; ");
 }
 function getCookiesForBrowser(refreshToken) {
@@ -815,19 +1338,36 @@ function getCookiesForBrowser(refreshToken) {
     { name: "sessionid_ss", value: refreshToken, domain, path: "/" }
   ];
 }
+function getCookiesForBrowserInternational(refreshToken) {
+  const regionInfo = parseRegionFromToken(refreshToken);
+  const token = regionInfo.isInternational ? refreshToken.substring(3) : refreshToken;
+  const domain = ".capcut.com";
+  return [
+    { name: "_tea_web_id", value: String(WEB_ID), domain, path: "/" },
+    { name: "is_staff_user", value: "false", domain, path: "/" },
+    { name: "uid_tt", value: USER_ID, domain, path: "/" },
+    { name: "uid_tt_ss", value: USER_ID, domain, path: "/" },
+    { name: "sid_tt", value: token, domain, path: "/" },
+    { name: "sessionid", value: token, domain, path: "/" },
+    { name: "sessionid_ss", value: token, domain, path: "/" },
+    { name: "sid_guard", value: `${token}%7C${util_default.unixTimestamp()}%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT`, domain, path: "/" }
+  ];
+}
 async function getCredit(refreshToken) {
   const {
     credit: { gift_credit, purchase_credit, vip_credit }
   } = await request("POST", "/commerce/v1/benefits/user_credit", refreshToken, {
     data: {},
     headers: {
-      // Cookie: 'x-web-secsdk-uid=ef44bd0d-0cf6-448c-b517-fd1b5a7267ba; s_v_web_id=verify_m4b1lhlu_DI8qKRlD_7mJJ_4eqx_9shQ_s8eS2QLAbc4n; passport_csrf_token=86f3619c0c4a9c13f24117f71dc18524; passport_csrf_token_default=86f3619c0c4a9c13f24117f71dc18524; n_mh=9-mIeuD4wZnlYrrOvfzG3MuT6aQmCUtmr8FxV8Kl8xY; sid_guard=a7eb745aec44bb3186dbc2083ea9e1a6%7C1733386629%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT; uid_tt=59a46c7d3f34bda9588b93590cca2e12; uid_tt_ss=59a46c7d3f34bda9588b93590cca2e12; sid_tt=a7eb745aec44bb3186dbc2083ea9e1a6; sessionid=a7eb745aec44bb3186dbc2083ea9e1a6; sessionid_ss=a7eb745aec44bb3186dbc2083ea9e1a6; is_staff_user=false; sid_ucp_v1=1.0.0-KGRiOGY2ODQyNWU1OTk3NzRhYTE2ZmZhYmFjNjdmYjY3NzRmZGRiZTgKHgjToPCw0cwbEIXDxboGGJ-tHyAMMITDxboGOAhAJhoCaGwiIGE3ZWI3NDVhZWM0NGJiMzE4NmRiYzIwODNlYTllMWE2; ssid_ucp_v1=1.0.0-KGRiOGY2ODQyNWU1OTk3NzRhYTE2ZmZhYmFjNjdmYjY3NzRmZGRiZTgKHgjToPCw0cwbEIXDxboGGJ-tHyAMMITDxboGOAhAJhoCaGwiIGE3ZWI3NDVhZWM0NGJiMzE4NmRiYzIwODNlYTllMWE2; store-region=cn-gd; store-region-src=uid; user_spaces_idc={"7444764277623653426":"lf"}; ttwid=1|cxHJViEev1mfkjntdMziir8SwbU8uPNVSaeh9QpEUs8|1733966961|d8d52f5f56607427691be4ac44253f7870a34d25dd05a01b4d89b8a7c5ea82ad; _tea_web_id=7444838473275573797; fpk1=fa6c6a4d9ba074b90003896f36b6960066521c1faec6a60bdcb69ec8ddf85e8360b4c0704412848ec582b2abca73d57a; odin_tt=efe9dc150207879b88509e651a1c4af4e7ffb4cfcb522425a75bd72fbf894eda570bbf7ffb551c8b1de0aa2bfa0bd1be6c4157411ecdcf4464fcaf8dd6657d66',
+      // Cookie: 'x-web-secsdk-uid=ef44bd0d-0cf6-448c-b517-fd1b5a7267ba; s_v_web_id=verify_m4b1lhlu_DI8qKRlD_7mJJ_4eqx_9shQ_s8eS2QLAbc4n; passport_csrf_token=86f3619c0c4a9c13f24117f71dc18524; passport_csrf_token_default=86f3619c0c4a9c13f24117f71dc18524; n_mh=9-mIeuD4wZnlYrrOvfzG3MuT6aQmCUtmr8FxV8Kl8xY; sid_guard=aabbddddddddddddddd%7C1733386629%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT; uid_tt=59a46c7d3f34bda9588b93590cca2e12; uid_tt_ss=59a46c7d3f34bda9588b93590cca2e12; sid_tt=aabbddddddddddddddd; sessionid=aabbddddddddddddddd; sessionid_ss=aabbddddddddddddddd; is_staff_user=false; sid_ucp_v1=1.0.0-KGRiOGY2ODQyNWU1OTk3NzRhYTE2ZmZhYmFjNjdmYjY3NzRmZGRiZTgKHgjToPCw0cwbEIXDxboGGJ-tHyAMMITDxboGOAhAJhoCaGwiIGE3ZWI3NDVhZWM0NGJiMzE4NmRiYzIwODNlYTllMWE2; ssid_ucp_v1=1.0.0-KGRiOGY2ODQyNWU1OTk3NzRhYTE2ZmZhYmFjNjdmYjY3NzRmZGRiZTgKHgjToPCw0cwbEIXDxboGGJ-tHyAMMITDxboGOAhAJhoCaGwiIGE3ZWI3NDVhZWM0NGJiMzE4NmRiYzIwODNlYTllMWE2; store-region=cn-gd; store-region-src=uid; user_spaces_idc={"7444764277623653426":"lf"}; ttwid=1|cxHJViEev1mfkjntdMziir8SwbU8uPNVSaeh9QpEUs8|1733966961|d8d52f5f56607427691be4ac44253f7870a34d25dd05a01b4d89b8a7c5ea82ad; _tea_web_id=7444838473275573797; fpk1=fa6c6a4d9ba074b90003896f36b6960066521c1faec6a60bdcb69ec8ddf85e8360b4c0704412848ec582b2abca73d57a; odin_tt=efe9dc150207879b88509e651a1c4af4e7ffb4cfcb522425a75bd72fbf894eda570bbf7ffb551c8b1de0aa2bfa0bd1be6c4157411ecdcf4464fcaf8dd6657d66',
       Referer: "https://jimeng.jianying.com/ai-tool/image/generate"
       // "Device-Time": 1733966964,
       // Sign: "f3dbb824b378abea7c03cbb152b3a365"
     }
   });
-  logger_default.info(`Credits: gift=${gift_credit}, purchased=${purchase_credit}, VIP=${vip_credit}`);
+  logger_default.info(`
+\u79EF\u5206\u4FE1\u606F: 
+\u8D60\u9001\u79EF\u5206: ${gift_credit}, \u8D2D\u4E70\u79EF\u5206: ${purchase_credit}, VIP\u79EF\u5206: ${vip_credit}`);
   return {
     giftCredit: gift_credit,
     purchaseCredit: purchase_credit,
@@ -836,7 +1376,7 @@ async function getCredit(refreshToken) {
   };
 }
 async function receiveCredit(refreshToken) {
-  logger_default.info("Claiming daily credits...");
+  logger_default.info("\u6B63\u5728\u6536\u53D6\u4ECA\u65E5\u79EF\u5206...");
   const { cur_total_credits, receive_quota } = await request("POST", "/commerce/v1/benefits/credit_receive", refreshToken, {
     data: {
       time_zone: "Asia/Shanghai"
@@ -845,64 +1385,108 @@ async function receiveCredit(refreshToken) {
       Referer: "https://jimeng.jianying.com/ai-tool/image/generate"
     }
   });
-  logger_default.info(`Daily credits claimed: ${receive_quota}. Remaining balance: ${cur_total_credits}`);
+  logger_default.info(`
+\u4ECA\u65E5${receive_quota}\u79EF\u5206\u6536\u53D6\u6210\u529F
+\u5269\u4F59\u79EF\u5206: ${cur_total_credits}`);
   return cur_total_credits;
 }
 async function request(method, uri, refreshToken, options = {}) {
-  const token = await acquireToken(refreshToken);
+  const regionInfo = parseRegionFromToken(refreshToken);
+  const rawToken = regionInfo.isInternational ? refreshToken.substring(3) : refreshToken;
+  const token = await acquireToken(rawToken);
   const deviceTime = util_default.unixTimestamp();
   const sign = util_default.md5(
     `9e2c|${uri.slice(-7)}|${PLATFORM_CODE}|${VERSION_CODE}|${deviceTime}||11ac`
   );
-  const fullUrl = `https://jimeng.jianying.com${uri}`;
+  let baseUrl = BASE_URL_CN;
+  let region = "cn";
+  let lan = "zh-Hans";
+  let loc = "cn";
+  if (regionInfo.isUS) {
+    baseUrl = uri.startsWith("/commerce/") ? BASE_URL_US_COMMERCE : BASE_URL_DREAMINA_US;
+    region = "US";
+    lan = "en";
+    loc = "us";
+  } else if (regionInfo.isInternational) {
+    const prefix = refreshToken.substring(0, 2).toLowerCase();
+    const regionCfg = INTERNATIONAL_REGION_MAP[prefix];
+    baseUrl = uri.startsWith("/commerce/") ? BASE_URL_HK_COMMERCE : BASE_URL_DREAMINA_HK;
+    region = (regionCfg == null ? void 0 : regionCfg.region) || "HK";
+    lan = (regionCfg == null ? void 0 : regionCfg.lan) || "en";
+    loc = (regionCfg == null ? void 0 : regionCfg.loc) || "hk";
+  }
+  const origin = new URL(baseUrl).origin;
+  const fullUrl = `${baseUrl}${uri}`;
   const requestParams = {
-    aid: DEFAULT_ASSISTANT_ID,
+    aid: getAssistantId(regionInfo),
     device_platform: "web",
-    region: "cn",
-    webId: WEB_ID,
-    da_version: "3.3.2",
+    region,
+    ...regionInfo.isInternational ? {} : { webId: WEB_ID },
+    da_version: DA_VERSION,
+    os: "windows",
     web_component_open_flag: 1,
-    web_version: "7.5.0",
+    web_version: WEB_VERSION,
     aigc_features: "app_lip_sync",
     ...options.params || {}
   };
   const headers = {
     ...FAKE_HEADERS,
-    Cookie: generateCookie(token),
+    Appid: getAssistantId(regionInfo),
+    Lan: lan,
+    Loc: loc,
+    Origin: origin,
+    Referer: origin,
+    Cookie: generateCookie(refreshToken),
     "Device-Time": deviceTime,
     Sign: sign,
     "Sign-Ver": "1",
+    Tdid: "",
     ...options.headers || {}
   };
-  logger_default.info(`Sending request: ${method.toUpperCase()} ${fullUrl}`);
-  logger_default.info(`Request params: ${JSON.stringify(requestParams)}`);
-  logger_default.info(`Request data: ${JSON.stringify(options.data || {})}`);
+  let signedParams = { ...requestParams };
+  let signedHeaders = { ...headers };
+  let signedUrl = fullUrl;
+  if (regionInfo.isInternational || regionInfo.isUS) {
+    const userAgent = FAKE_HEADERS["User-Agent"];
+    const qsParts = Object.entries(requestParams).map(([k, v]) => `${k}=${v}`);
+    const queryString = qsParts.join("&");
+    const bodyString = options.data ? JSON.stringify(options.data) : "";
+    const signedQS = signXBogus(queryString, userAgent, bodyString);
+    signedUrl = `${baseUrl}${uri}?${signedQS}`;
+    signedParams = {};
+    const xGnarly = getXGnarly(queryString, bodyString, userAgent);
+    signedHeaders["X-Gnarly"] = xGnarly;
+    logger_default.info(`\u5DF2\u6DFB\u52A0 X-Bogus \u548C X-Gnarly \u7B7E\u540D\uFF0CURL: ${signedUrl.substring(0, 200)}`);
+  }
+  logger_default.info(`\u53D1\u9001\u8BF7\u6C42: ${method.toUpperCase()} ${fullUrl}`);
+  logger_default.info(`\u8BF7\u6C42\u53C2\u6570: ${JSON.stringify(signedParams)}`);
+  logger_default.info(`\u8BF7\u6C42\u6570\u636E: ${JSON.stringify(options.data || {})}`);
   let retries = 0;
   const maxRetries = 3;
   let lastError = null;
   while (retries <= maxRetries) {
     try {
       if (retries > 0) {
-        logger_default.info(`Retry #${retries} ${method.toUpperCase()} ${fullUrl}`);
+        logger_default.info(`\u7B2C ${retries} \u6B21\u91CD\u8BD5\u8BF7\u6C42: ${method.toUpperCase()} ${fullUrl}`);
         await new Promise((resolve) => setTimeout(resolve, 1e3 * retries));
       }
       const response = await axios2.request({
         method,
-        url: fullUrl,
-        params: requestParams,
-        headers,
+        url: signedUrl,
+        params: signedParams,
+        headers: signedHeaders,
         timeout: 45e3,
         // 增加超时时间到45秒
         validateStatus: () => true,
         // 允许任何状态码
         ..._7.omit(options, "params", "headers")
       });
-      logger_default.info(`Response status: ${response.status} ${response.statusText}`);
+      logger_default.info(`\u54CD\u5E94\u72B6\u6001: ${response.status} ${response.statusText}`);
       if (options.responseType == "stream") return response;
       const responseDataSummary = JSON.stringify(response.data).substring(0, 500) + (JSON.stringify(response.data).length > 500 ? "..." : "");
-      logger_default.info(`Response data summary: ${responseDataSummary}`);
+      logger_default.info(`\u54CD\u5E94\u6570\u636E\u6458\u8981: ${responseDataSummary}`);
       if (response.status >= 400) {
-        logger_default.warn(`HTTP error: ${response.status} ${response.statusText}`);
+        logger_default.warn(`HTTP\u9519\u8BEF: ${response.status} ${response.statusText}`);
         if (retries < maxRetries) {
           retries++;
           continue;
@@ -911,7 +1495,7 @@ async function request(method, uri, refreshToken, options = {}) {
       return checkResult(response);
     } catch (error) {
       lastError = error;
-      logger_default.error(`Request failed (attempt ${retries + 1}/${maxRetries + 1}): ${error.message}`);
+      logger_default.error(`\u8BF7\u6C42\u5931\u8D25 (\u5C1D\u8BD5 ${retries + 1}/${maxRetries + 1}): ${error.message}`);
       if ((error.code === "ECONNABORTED" || error.code === "ETIMEDOUT" || error.message.includes("timeout") || error.message.includes("network")) && retries < maxRetries) {
         retries++;
         continue;
@@ -919,23 +1503,27 @@ async function request(method, uri, refreshToken, options = {}) {
       break;
     }
   }
-  logger_default.error(`All retries exhausted after ${retries} retries: ${lastError.message}`);
+  logger_default.error(`\u8BF7\u6C42\u5931\u8D25\uFF0C\u5DF2\u91CD\u8BD5 ${retries} \u6B21: ${lastError.message}`);
   if (lastError.response) {
-    logger_default.error(`Response status: ${lastError.response.status}`);
-    logger_default.error(`Response data: ${JSON.stringify(lastError.response.data)}`);
+    logger_default.error(`\u54CD\u5E94\u72B6\u6001: ${lastError.response.status}`);
+    logger_default.error(`\u54CD\u5E94\u6570\u636E: ${JSON.stringify(lastError.response.data)}`);
   }
   throw lastError;
 }
 function checkResult(result) {
   const { ret, errmsg, data } = result.data;
+  if (ret === "" && errmsg === "") return data ?? result.data;
   if (!_7.isFinite(Number(ret))) return result.data;
   if (ret === "0") return data;
   if (ret === "5000")
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
-  throw new APIException(exceptions_default.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[\u65E0\u6CD5\u751F\u6210\u56FE\u50CF]: \u5373\u68A6\u79EF\u5206\u53EF\u80FD\u4E0D\u8DB3\uFF0C${errmsg}`);
+  throw new APIException(exceptions_default.API_REQUEST_FAILED, `[\u8BF7\u6C42jimeng\u5931\u8D25]: ${errmsg}`);
 }
 function tokenSplit(authorization) {
   return authorization.replace("Bearer ", "").split(",");
+}
+async function acquireToken(refreshToken) {
+  return parseRegionFromToken(refreshToken).isInternational ? refreshToken.substring(3) : refreshToken;
 }
 async function getTokenLiveStatus(refreshToken) {
   const result = await request(
@@ -957,464 +1545,210 @@ async function getTokenLiveStatus(refreshToken) {
 }
 
 // src/lib/browser-service.ts
-var cachedChromiumPath = null;
-function findChromiumPath() {
-  if (cachedChromiumPath) {
-    return cachedChromiumPath;
-  }
-  if (process.env.CHROMIUM_PATH && fs6.existsSync(process.env.CHROMIUM_PATH)) {
-    cachedChromiumPath = process.env.CHROMIUM_PATH;
-    return cachedChromiumPath;
-  }
-  try {
-    const playwrightPath = chromium.executablePath();
-    if (playwrightPath && fs6.existsSync(playwrightPath)) {
-      logger_default.info(`BrowserService: using Playwright built-in Chromium: ${playwrightPath}`);
-      cachedChromiumPath = playwrightPath;
-      return cachedChromiumPath;
-    }
-  } catch {
-  }
-  try {
-    const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
-    if (whichPath && fs6.existsSync(whichPath)) {
-      cachedChromiumPath = whichPath;
-      return cachedChromiumPath;
-    }
-  } catch {
-  }
-  try {
-    const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5e3 }).trim();
-    if (nixChrome && fs6.existsSync(nixChrome)) {
-      cachedChromiumPath = nixChrome;
-      return cachedChromiumPath;
-    }
-  } catch {
-  }
-  const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
-  for (const p of fallbacks) {
-    if (fs6.existsSync(p)) {
-      cachedChromiumPath = p;
-      return cachedChromiumPath;
-    }
-  }
-  return "";
-}
-var trackedBrowserPid = null;
-function killTrackedBrowserProcess() {
-  if (!trackedBrowserPid) return;
-  try {
-    execSync(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
-    execSync(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5e3 });
-    logger_default.info(`BrowserService: killed stale browser process (pid: ${trackedBrowserPid})`);
-  } catch {
-  }
-  trackedBrowserPid = null;
-}
-function getSystemMemoryInfo() {
-  const totalMB = Math.round(os2.totalmem() / 1024 / 1024);
-  const freeMB = Math.round(os2.freemem() / 1024 / 1024);
-  const usedPercent = Math.round((totalMB - freeMB) / totalMB * 100);
-  return { totalMB, freeMB, usedPercent };
-}
 var SCRIPT_WHITELIST_DOMAINS = [
   "vlabstatic.com",
   "bytescm.com",
   "jianying.com",
-  "byteimg.com"
+  "byteimg.com",
+  "capcutstatic.com",
+  "capcut.com",
+  "bytegecko.com",
+  "bytedance.com",
+  "bytegoofy.com",
+  "ttwstatic.com"
 ];
 var BLOCKED_RESOURCE_TYPES = ["image", "font", "stylesheet", "media"];
-var SESSION_IDLE_TIMEOUT = 5 * 60 * 1e3;
+var SESSION_IDLE_TIMEOUT = 10 * 60 * 1e3;
 var BDMS_READY_TIMEOUT = 3e4;
-var BROWSER_LAUNCH_TIMEOUT = 12e4;
-var MAX_SESSIONS = 2;
-var HEALTH_CHECK_INTERVAL = 30 * 1e3;
-var FETCH_TIMEOUT = 3e4;
-var PROACTIVE_RECONNECT_DELAY = 2e3;
-var API_CIRCUIT_BREAKER_THRESHOLD = 3;
-var API_CIRCUIT_BREAKER_COOLDOWN = 20 * 1e3;
-var BROWSER_CIRCUIT_BREAKER_THRESHOLD = 3;
-var BROWSER_CIRCUIT_BREAKER_COOLDOWN = 30 * 1e3;
-var RECYCLE_AFTER_N_JOBS = parseInt(process.env.BROWSER_RECYCLE_AFTER_JOBS || "5", 10);
-var RECYCLE_DELAY_MS = 5e3;
+var INTERNATIONAL_API_HOST_MAP = {
+  "dreamina.capcut.com": "mweb-api-sg.capcut.com",
+  "dreamina.us.capcut.com": "dreamina-api.us.capcut.com"
+};
 var BrowserService = class {
   browser = null;
   sessions = /* @__PURE__ */ new Map();
   launching = null;
-  healthCheckTimer = null;
-  apiConsecutiveFailures = 0;
-  apiLastFailureTime = 0;
-  browserConsecutiveFailures = 0;
-  browserLastFailureTime = 0;
-  browserStartCount = 0;
-  browserStartTime = 0;
-  jobsCompletedCount = 0;
-  recycleScheduled = false;
-  isReady() {
-    return this.browser !== null && this.browser.isConnected();
-  }
-  isApiCircuitOpen() {
-    if (this.apiConsecutiveFailures < API_CIRCUIT_BREAKER_THRESHOLD) {
-      return false;
-    }
-    const elapsed = Date.now() - this.apiLastFailureTime;
-    if (elapsed > API_CIRCUIT_BREAKER_COOLDOWN) {
-      logger_default.info(`BrowserService: API circuit breaker cooled (${Math.round(elapsed / 1e3)}s), allowing retry`);
-      this.apiConsecutiveFailures = 0;
-      return false;
-    }
-    return true;
-  }
-  isBrowserCircuitOpen() {
-    if (this.browserConsecutiveFailures < BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      return false;
-    }
-    const elapsed = Date.now() - this.browserLastFailureTime;
-    if (elapsed > BROWSER_CIRCUIT_BREAKER_COOLDOWN) {
-      logger_default.info(`BrowserService: browser circuit breaker cooled (${Math.round(elapsed / 1e3)}s), allowing retry`);
-      this.browserConsecutiveFailures = 0;
-      return false;
-    }
-    return true;
-  }
-  recordApiFailure() {
-    this.apiConsecutiveFailures++;
-    this.apiLastFailureTime = Date.now();
-    logger_default.warn(`BrowserService: API consecutive failures: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
-    if (this.apiConsecutiveFailures >= API_CIRCUIT_BREAKER_THRESHOLD) {
-      logger_default.warn(`BrowserService: API circuit breaker OPEN, cooling for ${API_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
-      this.scheduleApiRecovery();
-    }
-  }
-  recordApiSuccess() {
-    if (this.apiConsecutiveFailures > 0) {
-      logger_default.info(`BrowserService: API recovered, circuit breaker reset (was ${this.apiConsecutiveFailures} consecutive failures)`);
-    }
-    this.apiConsecutiveFailures = 0;
-  }
-  recordBrowserFailure() {
-    this.browserConsecutiveFailures++;
-    this.browserLastFailureTime = Date.now();
-    logger_default.warn(`BrowserService: browser consecutive failures: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
-    if (this.browserConsecutiveFailures >= BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      logger_default.warn(`BrowserService: browser circuit breaker OPEN, cooling for ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1e3}s`);
-      this.scheduleBrowserRecovery();
-    }
-  }
-  recordBrowserSuccess() {
-    if (this.browserConsecutiveFailures > 0) {
-      logger_default.info(`BrowserService: browser recovered, circuit breaker reset (was ${this.browserConsecutiveFailures} consecutive failures)`);
-    }
-    this.browserConsecutiveFailures = 0;
-  }
-  scheduleApiRecovery() {
-    setTimeout(() => {
-      logger_default.info(`BrowserService: API circuit breaker cooldown ended, counter reset`);
-      this.apiConsecutiveFailures = 0;
-    }, API_CIRCUIT_BREAKER_COOLDOWN + 1e3);
-  }
-  scheduleBrowserRecovery() {
-    setTimeout(() => {
-      if (this.isReady() || this.launching) {
-        logger_default.info(`BrowserService: browser circuit breaker recovery check: browser ready, no reconnect needed`);
-        return;
-      }
-      logger_default.info(`BrowserService: browser circuit breaker cooldown ended, attempting recovery...`);
-      this.browserConsecutiveFailures = 0;
-      this.ensureBrowser().then(() => {
-        logger_default.info(`BrowserService: browser circuit breaker recovered successfully`);
-      }).catch((err) => {
-        logger_default.error(`BrowserService: browser circuit breaker recovery failed: ${err.message}`);
-      });
-    }, BROWSER_CIRCUIT_BREAKER_COOLDOWN + 1e3);
-  }
-  proactiveReconnect() {
-    if (this.launching || this.isBrowserCircuitOpen()) {
-      return;
-    }
-    logger_default.info(`BrowserService: scheduling proactive reconnect (in ${PROACTIVE_RECONNECT_DELAY}ms)...`);
-    setTimeout(() => {
-      if (this.isReady() || this.launching || this.isBrowserCircuitOpen()) {
-        return;
-      }
-      logger_default.info(`BrowserService: executing proactive background reconnect...`);
-      this.ensureBrowser().then(() => {
-        logger_default.info(`BrowserService: proactive reconnect succeeded`);
-      }).catch((err) => {
-        logger_default.error(`BrowserService: proactive reconnect failed: ${err.message}`);
-      });
-    }, PROACTIVE_RECONNECT_DELAY);
-  }
+  /**
+   * 懒启动浏览器实例
+   */
   async ensureBrowser() {
     var _a;
     if ((_a = this.browser) == null ? void 0 : _a.isConnected()) {
       return this.browser;
     }
-    if (this.isBrowserCircuitOpen()) {
-      const remaining = Math.round((BROWSER_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.browserLastFailureTime)) / 1e3);
-      throw new Error(`BrowserService: browser temporarily unavailable, retry in ${remaining}s`);
-    }
     if (this.launching) {
       return this.launching;
     }
     this.launching = (async () => {
-      const chromiumPath = findChromiumPath();
-      const memInfo = getSystemMemoryInfo();
-      logger_default.info(`BrowserService: launching Chromium... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
-      if (memInfo.freeMB < 200) {
-        logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, cleaning up before launch...`);
-        killTrackedBrowserProcess();
-        await new Promise((r) => setTimeout(r, 2e3));
-      }
-      const maxAttempts = 3;
-      let lastError = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          if (attempt > 1) {
-            logger_default.info(`BrowserService: cleaning up stale processes before retry... (attempt ${attempt})`);
-            killTrackedBrowserProcess();
-            await new Promise((r) => setTimeout(r, 3e3));
-          }
-          const launchOptions = {
-            headless: true,
-            timeout: BROWSER_LAUNCH_TIMEOUT,
-            args: [
-              "--no-sandbox",
-              "--disable-setuid-sandbox",
-              "--disable-dev-shm-usage",
-              "--disable-gpu",
-              "--no-first-run",
-              "--disable-extensions",
-              "--disable-background-networking",
-              "--disable-sync",
-              "--disable-translate",
-              "--metrics-recording-only",
-              "--mute-audio",
-              "--no-default-browser-check",
-              "--js-flags=--max-old-space-size=128",
-              "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-              "--disable-hang-monitor",
-              "--disable-popup-blocking",
-              "--disable-prompt-on-repost",
-              "--disable-renderer-backgrounding",
-              "--disable-component-update",
-              "--disable-domain-reliability",
-              "--disable-client-side-phishing-detection",
-              "--disable-breakpad",
-              "--disable-software-rasterizer",
-              "--enable-low-end-device-mode",
-              "--disable-canvas-aa",
-              "--disable-2d-canvas-clip-aa"
-            ]
-          };
-          if (chromiumPath) {
-            launchOptions.executablePath = chromiumPath;
-          }
-          this.browser = await chromium.launch(launchOptions);
-          try {
-            const serverProcess = this.browser._browserProcess || this.browser._process;
-            if (serverProcess == null ? void 0 : serverProcess.pid) {
-              trackedBrowserPid = serverProcess.pid;
-              logger_default.info(`BrowserService: browser process PID: ${trackedBrowserPid}`);
-            }
-          } catch {
-          }
-          this.browser.on("disconnected", () => {
-            const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1e3) : 0;
-            logger_default.warn(`BrowserService: browser disconnected (uptime: ${uptime}s, active sessions: ${this.sessions.size})`);
-            this.browser = null;
-            this.sessions.clear();
-            trackedBrowserPid = null;
-            this.proactiveReconnect();
-          });
-          this.browserStartCount++;
-          this.browserStartTime = Date.now();
-          const memAfter = getSystemMemoryInfo();
-          logger_default.info(`BrowserService: Chromium launched successfully (attempt ${attempt}, start #${this.browserStartCount}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
-          this.recordBrowserSuccess();
-          this.startHealthCheck();
-          return this.browser;
-        } catch (err) {
-          lastError = err;
-          const memErr = getSystemMemoryInfo();
-          logger_default.error(`BrowserService: launch failed (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
-          if (attempt < maxAttempts) {
-            const backoffMs = 5e3 * attempt;
-            logger_default.info(`BrowserService: retrying in ${backoffMs / 1e3}s...`);
-            await new Promise((r) => setTimeout(r, backoffMs));
-          }
-        }
-      }
-      this.recordBrowserFailure();
-      throw lastError || new Error("browser launch failed");
-    })().finally(() => {
-      this.launching = null;
-    });
-    return this.launching;
-  }
-  startHealthCheck() {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-    }
-    this.healthCheckTimer = setInterval(async () => {
-      var _a;
+      logger_default.info("BrowserService: \u6B63\u5728\u542F\u52A8 Chromium \u6D4F\u89C8\u5668...");
       try {
-        if (!((_a = this.browser) == null ? void 0 : _a.isConnected())) {
-          logger_default.warn("BrowserService: health check: browser disconnected, triggering reconnect...");
+        this.browser = await chromium.launch({
+          headless: true,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-zygote",
+            "--single-process"
+          ]
+        });
+        this.browser.on("disconnected", () => {
+          logger_default.warn("BrowserService: \u6D4F\u89C8\u5668\u5DF2\u65AD\u5F00\u8FDE\u63A5");
           this.browser = null;
           this.sessions.clear();
-          this.stopHealthCheck();
-          this.proactiveReconnect();
-          return;
-        }
-        const memInfo = getSystemMemoryInfo();
-        if (memInfo.freeMB < 200 && this.sessions.size > 0) {
-          const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
-          logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB free), evicting ${evictCount} session(s)...`);
-          await this.evictOldestSessions(evictCount);
-        }
-        const now = Date.now();
-        for (const [token, session] of this.sessions) {
-          if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
-            logger_default.info(`BrowserService: health check: closing idle session ${token.substring(0, 8)}...`);
-            await this.closeSession(token);
-          }
-        }
-      } catch (err) {
-        logger_default.error(`BrowserService: health check error: ${err.message}`);
+        });
+        logger_default.info("BrowserService: Chromium \u6D4F\u89C8\u5668\u542F\u52A8\u6210\u529F");
+        return this.browser;
+      } finally {
+        this.launching = null;
       }
-    }, HEALTH_CHECK_INTERVAL);
-    if (this.healthCheckTimer.unref) {
-      this.healthCheckTimer.unref();
-    }
+    })();
+    return this.launching;
   }
-  stopHealthCheck() {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-      this.healthCheckTimer = null;
-    }
-  }
-  async evictOldestSessions(count) {
-    const sorted = [...this.sessions.entries()].sort(
-      (a, b) => a[1].lastUsed - b[1].lastUsed
-    );
-    for (let i = 0; i < Math.min(count, sorted.length); i++) {
-      const [token] = sorted[i];
-      logger_default.info(`BrowserService: evicting oldest session ${token.substring(0, 8)}...`);
-      await this.closeSession(token);
-    }
-  }
-  async getSession(token) {
-    const existing = this.sessions.get(token);
+  /**
+   * 获取或创建指定 token 的浏览器会话
+   * @param token raw sessionid (不含前缀)
+   * @param region "cn" 或 "international"
+   */
+  async getSession(token, region = "cn") {
+    const sessionKey = `${region}:${token}`;
+    const existing = this.sessions.get(sessionKey);
     if (existing) {
-      try {
-        if (!existing.page.isClosed()) {
-          existing.lastUsed = Date.now();
-          if (existing.idleTimer) {
-            clearTimeout(existing.idleTimer);
-          }
-          existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
-          return existing;
-        }
-      } catch {
+      existing.lastUsed = Date.now();
+      if (existing.idleTimer) {
+        clearTimeout(existing.idleTimer);
       }
-      logger_default.info(`BrowserService: session ${token.substring(0, 8)}... is stale, recreating`);
-      this.sessions.delete(token);
-      if (existing.idleTimer) clearTimeout(existing.idleTimer);
+      existing.idleTimer = setTimeout(() => this.closeSession(sessionKey), SESSION_IDLE_TIMEOUT);
+      return existing;
     }
-    if (this.sessions.size >= MAX_SESSIONS) {
-      logger_default.warn(`BrowserService: session limit reached (${MAX_SESSIONS}), evicting oldest...`);
-      await this.evictOldestSessions(1);
-    }
-    return this.createSession(token);
+    return this.createSession(token, region);
   }
-  async createSession(token) {
-    const maxAttempts = 2;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  /**
+   * 国际版 API 请求路由重写
+   * 浏览器页面在 dreamina.capcut.com，但 API 在 mweb-api-sg.capcut.com
+   * secsdk 要求同源才能正确签名，所以将同源请求代理转发到实际 API
+   */
+  async setupInternationalApiRoute(page) {
+    await page.route("**/mweb/**", async (route) => {
+      const request2 = route.request();
+      const url = new URL(request2.url());
+      const apiHost = INTERNATIONAL_API_HOST_MAP[url.hostname];
+      if (!apiHost) {
+        return route.continue();
+      }
+      const targetUrl = `${url.protocol}//${apiHost}${url.pathname}${url.search}`;
+      logger_default.info(`BrowserService: API \u8DEF\u7531\u91CD\u5199 ${request2.url().substring(0, 80)} \u2192 ${targetUrl.substring(0, 80)}`);
+      logger_default.info(`BrowserService: [DEBUG] \u5B8C\u6574URL: ${request2.url()}`);
+      const headers = request2.headers();
+      const headerKeys = Object.keys(headers).filter((k) => !["accept", "accept-language", "user-agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "origin", "referer"].includes(k));
+      logger_default.info(`BrowserService: [DEBUG] \u7279\u6B8A\u8BF7\u6C42\u5934: ${JSON.stringify(headerKeys.reduce((acc, k) => ({ ...acc, [k]: headers[k] }), {}))}`);
+      logger_default.info(`BrowserService: [DEBUG] \u67E5\u8BE2\u53C2\u6570: ${url.search}`);
       try {
-        const browser = await this.ensureBrowser();
-        const memInfo = getSystemMemoryInfo();
-        logger_default.info(`BrowserService: creating session for token ${token.substring(0, 8)}... (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
-        if (memInfo.freeMB < 150 && this.sessions.size > 0) {
-          logger_default.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, progressively evicting sessions...`);
-          while (this.sessions.size > 0) {
-            await this.evictOldestSessions(1);
-            const updated = getSystemMemoryInfo();
-            if (updated.freeMB >= 150) break;
-          }
-          await new Promise((r) => setTimeout(r, 1e3));
-        }
-        const context = await browser.newContext({
-          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-          viewport: { width: 1280, height: 720 },
-          locale: "zh-CN"
-        });
-        const cookies = getCookiesForBrowser(token);
-        await context.addCookies(cookies);
-        await context.route("**/*", (route) => {
-          const request2 = route.request();
-          const resourceType = request2.resourceType();
-          const url = request2.url();
-          if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
-            return route.abort();
-          }
-          if (resourceType === "script") {
-            const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some(
-              (domain) => url.includes(domain)
-            );
-            if (!isWhitelisted) {
-              return route.abort();
-            }
-          }
-          return route.continue();
-        });
-        const page = await context.newPage();
-        logger_default.info("BrowserService: navigating to jimeng.jianying.com...");
-        await page.goto("https://jimeng.jianying.com", {
-          waitUntil: "domcontentloaded",
-          timeout: 45e3
-        });
-        logger_default.info("BrowserService: waiting for bdms SDK...");
-        try {
-          await page.waitForFunction(
-            () => {
-              var _a;
-              return ((_a = window.bdms) == null ? void 0 : _a.init) || window.byted_acrawler || window.fetch.toString().indexOf("native code") === -1;
-            },
-            { timeout: BDMS_READY_TIMEOUT }
-          );
-          logger_default.info("BrowserService: bdms SDK is ready");
-        } catch (err) {
-          logger_default.warn(
-            "BrowserService: bdms SDK wait timed out, may not be fully loaded, continuing..."
-          );
-        }
-        const session = {
-          context,
-          page,
-          lastUsed: Date.now(),
-          idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT)
-        };
-        this.sessions.set(token, session);
-        return session;
+        const response = await route.fetch({ url: targetUrl });
+        await route.fulfill({ response });
       } catch (err) {
-        logger_default.error(`BrowserService: session creation failed (attempt ${attempt}/${maxAttempts}): ${err.message}`);
-        this.browser = null;
-        this.sessions.clear();
-        if (attempt >= maxAttempts) {
-          this.recordBrowserFailure();
-          throw err;
-        }
-        await new Promise((r) => setTimeout(r, 3e3));
+        logger_default.error(`BrowserService: API \u8DEF\u7531\u91CD\u5199\u5931\u8D25: ${err.message}`);
+        await route.abort();
       }
-    }
-    this.recordBrowserFailure();
-    throw new Error("session creation failed");
+    });
   }
+  /**
+   * 创建新的浏览器会话
+   */
+  async createSession(token, region = "cn") {
+    const browser = await this.ensureBrowser();
+    const sessionKey = `${region}:${token}`;
+    logger_default.info(`BrowserService: \u4E3A token ${token.substring(0, 8)}... (${region}) \u521B\u5EFA\u65B0\u4F1A\u8BDD`);
+    const context = await browser.newContext({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+      viewport: { width: 1920, height: 1080 },
+      locale: region === "international" ? "en-US" : "zh-CN"
+    });
+    if (region === "international") {
+      await context.setExtraHTTPHeaders({
+        "x-requested-with": "XMLHttpRequest",
+        "loc": "en"
+      });
+    }
+    const cookies = region === "international" ? getCookiesForBrowserInternational(token) : getCookiesForBrowser(token);
+    await context.addCookies(cookies);
+    await context.route("**/*", (route) => {
+      const request2 = route.request();
+      const resourceType = request2.resourceType();
+      const url = request2.url();
+      if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
+        return route.abort();
+      }
+      if (resourceType === "script") {
+        const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some(
+          (domain) => url.includes(domain)
+        );
+        if (!isWhitelisted) {
+          logger_default.info(`BrowserService: [SCRIPT] \u5C4F\u853D\u811A\u672C: ${url.substring(0, 150)}`);
+          return route.abort();
+        }
+      }
+      return route.continue();
+    });
+    const page = await context.newPage();
+    if (region === "international") {
+      await this.setupInternationalApiRoute(page);
+    }
+    const navUrl = region === "international" ? "https://dreamina.capcut.com/ai-tool/video/generate" : "https://jimeng.jianying.com/ai-tool/video/generate";
+    logger_default.info(`BrowserService: \u6B63\u5728\u5BFC\u822A\u5230 ${navUrl} ...`);
+    await page.goto(navUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 3e4
+    });
+    const sdkName = region === "international" ? "secsdk" : "bdms";
+    logger_default.info(`BrowserService: \u7B49\u5F85 ${sdkName} SDK \u5C31\u7EEA...`);
+    try {
+      if (region === "international") {
+        await page.waitForFunction(
+          () => {
+            return window.__secsdk || window.__ac_nonce || window.byted_acrawler || // secsdk 会修改 fetch，注入签名 headers
+            window.fetch.toString().indexOf("native code") === -1;
+          },
+          { timeout: BDMS_READY_TIMEOUT }
+        );
+        logger_default.info(`BrowserService: secsdk \u68C0\u6D4B\u5230\uFF0C\u89E6\u53D1\u9875\u9762\u4EA4\u4E92\u4EE5\u6FC0\u6D3B\u7B7E\u540D...`);
+        await page.mouse.move(100, 100);
+        await page.mouse.click(100, 100);
+        await new Promise((resolve) => setTimeout(resolve, 3e3));
+      } else {
+        await page.waitForFunction(
+          () => {
+            var _a;
+            return ((_a = window.bdms) == null ? void 0 : _a.init) || window.byted_acrawler || window.fetch.toString().indexOf("native code") === -1;
+          },
+          { timeout: BDMS_READY_TIMEOUT }
+        );
+      }
+      logger_default.info(`BrowserService: ${sdkName} SDK \u5DF2\u5C31\u7EEA`);
+    } catch (err) {
+      logger_default.warn(
+        `BrowserService: ${sdkName} SDK \u7B49\u5F85\u8D85\u65F6\uFF0C\u53EF\u80FD\u672A\u5B8C\u5168\u52A0\u8F7D\uFF0C\u7EE7\u7EED\u5C1D\u8BD5...`
+      );
+    }
+    const session = {
+      context,
+      page,
+      lastUsed: Date.now(),
+      idleTimer: setTimeout(() => this.closeSession(sessionKey), SESSION_IDLE_TIMEOUT),
+      region
+    };
+    this.sessions.set(sessionKey, session);
+    return session;
+  }
+  /**
+   * 关闭指定 token 的会话
+   */
   async closeSession(token) {
     const session = this.sessions.get(token);
     if (!session) return;
-    logger_default.info(`BrowserService: closing idle session ${token.substring(0, 8)}...`);
+    logger_default.info(`BrowserService: \u5173\u95ED\u7A7A\u95F2\u4F1A\u8BDD ${token.substring(0, 8)}...`);
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
     }
@@ -1424,167 +1758,84 @@ var BrowserService = class {
     }
     this.sessions.delete(token);
   }
-  async fetch(token, url, options) {
-    if (this.isApiCircuitOpen()) {
-      const remaining = Math.round((API_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.apiLastFailureTime)) / 1e3);
-      const error = new Error(`BrowserService: requests temporarily unavailable, retry in ${remaining}s`);
-      error.statusCode = 503;
-      error.retryAfter = remaining;
-      throw error;
-    }
-    const totalStart = Date.now();
-    let session;
+  /**
+   * 将国际版 API URL 转为同源的页面 URL（用于 page.evaluate 中的 fetch）
+   * 例如 mweb-api-sg.capcut.com/xxx → dreamina.capcut.com/xxx
+   */
+  rewriteInternationalUrl(url) {
     try {
-      logger_default.info(`BrowserService: acquiring session...`);
-      session = await this.getSession(token);
-      const sessionElapsed = Date.now() - totalStart;
-      logger_default.info(`BrowserService: session ready (${sessionElapsed}ms)`);
-    } catch (err) {
-      const elapsed = Date.now() - totalStart;
-      logger_default.error(`BrowserService: session acquisition failed (${elapsed}ms): ${err.message}`);
-      const error = new Error(`BrowserService: session acquisition failed: ${err.message}`);
-      error.statusCode = 503;
-      error.retryAfter = 10;
-      throw error;
-    }
-    const fetchStart = Date.now();
-    let timedOut = false;
-    let timeoutTimer = null;
-    const cancelToken = { cancelled: false };
-    const timeoutPromise = new Promise((_17, reject) => {
-      timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        cancelToken.cancelled = true;
-        reject(new Error(`BrowserService: request timed out (${FETCH_TIMEOUT / 1e3}s)`));
-      }, FETCH_TIMEOUT);
-    });
-    try {
-      const resultPromise = this._doFetch(token, session, url, options, cancelToken);
-      const result = await Promise.race([resultPromise, timeoutPromise]);
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      const elapsed = Date.now() - fetchStart;
-      const totalElapsed = Date.now() - totalStart;
-      logger_default.info(`BrowserService: request completed (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
-      this.recordApiSuccess();
-      return result;
-    } catch (err) {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      const elapsed = Date.now() - fetchStart;
-      const totalElapsed = Date.now() - totalStart;
-      logger_default.error(`BrowserService: request failed (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${err.message}`);
-      if (timedOut) {
-        logger_default.warn(`BrowserService: timed out, closing session ${token.substring(0, 8)}...`);
-        this.closeSession(token).catch(() => {
-        });
+      const parsed = new URL(url);
+      for (const [pageHost, apiHost] of Object.entries(INTERNATIONAL_API_HOST_MAP)) {
+        if (parsed.hostname === apiHost) {
+          return `${parsed.protocol}//${pageHost}${parsed.pathname}${parsed.search}`;
+        }
       }
-      this.recordApiFailure();
-      if (timedOut) {
-        const error = new Error(err.message);
-        error.statusCode = 503;
-        error.retryAfter = 10;
-        throw error;
-      }
-      throw err;
+    } catch {
     }
+    return url;
   }
-  async _doFetch(token, session, url, options, cancelToken) {
-    if (cancelToken.cancelled) {
-      logger_default.warn(`BrowserService: request cancelled, skipping (already timed out)`);
-      throw new Error("BrowserService: request was cancelled");
-    }
-    logger_default.info(`BrowserService: proxying ${options.method || "GET"} ${url.substring(0, 100)}...`);
+  /**
+   * 通过浏览器代理发送 fetch 请求
+   * bdms/secsdk SDK 会自动拦截 fetch 并注入 a_bogus 签名
+   *
+   * @param token sessionid（raw，不含前缀）
+   * @param url 完整的请求 URL
+   * @param options fetch 选项 (method, headers, body)
+   * @param region 区域: "cn" 或 "international"
+   * @returns 解析后的 JSON 响应
+   */
+  async fetch(token, url, options, region = "cn") {
+    const sessionToken = region === "international" && /^[a-z]{2}-/i.test(token) ? token.substring(3) : token;
+    const session = await this.getSession(sessionToken, region);
+    const fetchUrl = region === "international" ? this.rewriteInternationalUrl(url) : url;
+    logger_default.info(`BrowserService: \u4EE3\u7406\u8BF7\u6C42 ${options.method || "GET"} ${fetchUrl.substring(0, 100)}...`);
     try {
       const result = await session.page.evaluate(
-        async ({ url: url2, options: options2, timeoutMs }) => {
+        async ({ url: url2, options: options2 }) => {
           try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const res = await fetch(url2, {
+            const res = await window.fetch(url2, {
               method: options2.method || "GET",
               headers: {
                 "Content-Type": "application/json",
+                "x-requested-with": "XMLHttpRequest",
                 ...options2.headers || {}
               },
               body: options2.body,
-              credentials: "include",
-              signal: controller.signal
+              credentials: "include"
             });
-            clearTimeout(timeoutId);
             const text = await res.text();
-            return { ok: res.ok, status: res.status, text };
+            return { ok: res.ok, status: res.status, text, url: res.url };
           } catch (err) {
             return { ok: false, status: 0, text: "", error: err.message };
           }
         },
-        { url, options, timeoutMs: FETCH_TIMEOUT - 2e3 }
+        { url: fetchUrl, options }
       );
-      if (result.error) {
-        throw new Error(`browser fetch error: ${result.error}`);
+      if (result.url) {
+        logger_default.info(`BrowserService: \u5B9E\u9645\u8BF7\u6C42 URL: ${result.url.substring(0, 200)}`);
       }
-      logger_default.info(`BrowserService: response status ${result.status}`);
+      if (result.error) {
+        throw new Error(`\u6D4F\u89C8\u5668 fetch \u5931\u8D25: ${result.error}`);
+      }
+      logger_default.info(`BrowserService: \u54CD\u5E94\u72B6\u6001 ${result.status}`);
       try {
         return JSON.parse(result.text);
       } catch {
-        logger_default.warn(`BrowserService: response is not valid JSON: ${result.text.substring(0, 200)}`);
+        logger_default.warn(`BrowserService: \u54CD\u5E94\u4E0D\u662F\u6709\u6548 JSON: ${result.text.substring(0, 200)}`);
         return result.text;
       }
     } catch (err) {
-      logger_default.error(`BrowserService: request execution failed: ${err.message}`);
-      await this.closeSession(token);
+      logger_default.error(`BrowserService: \u8BF7\u6C42\u6267\u884C\u5931\u8D25: ${err.message}`);
+      const sessionKey = `${region}:${sessionToken}`;
+      await this.closeSession(sessionKey);
       throw err;
     }
   }
-  recordJobCompleted() {
-    this.jobsCompletedCount++;
-    logger_default.info(`BrowserService: job completed (${this.jobsCompletedCount}/${RECYCLE_AFTER_N_JOBS} until proactive recycle)`);
-    if (this.jobsCompletedCount >= RECYCLE_AFTER_N_JOBS && !this.recycleScheduled) {
-      this.scheduleRecycle();
-    }
-  }
-  scheduleRecycle() {
-    this.recycleScheduled = true;
-    this.jobsCompletedCount = 0;
-    const memBefore = getSystemMemoryInfo();
-    logger_default.info(`BrowserService: scheduling proactive recycle in ${RECYCLE_DELAY_MS / 1e3}s (memory: ${memBefore.freeMB}MB free, ${memBefore.usedPercent}% used)`);
-    setTimeout(async () => {
-      try {
-        logger_default.info(`BrowserService: executing proactive recycle - closing sessions and browser...`);
-        this.stopHealthCheck();
-        for (const [token] of this.sessions) {
-          await this.closeSession(token);
-        }
-        if (this.browser) {
-          try {
-            await this.browser.close();
-          } catch {
-          }
-          this.browser = null;
-        }
-        killTrackedBrowserProcess();
-        const memAfter = getSystemMemoryInfo();
-        logger_default.info(`BrowserService: proactive recycle complete (memory: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used) - relaunching...`);
-        this.recycleScheduled = false;
-        this.warmUp();
-      } catch (err) {
-        logger_default.error(`BrowserService: proactive recycle failed: ${err.message}`);
-        this.recycleScheduled = false;
-      }
-    }, RECYCLE_DELAY_MS);
-  }
-  warmUp() {
-    if (this.isReady() || this.launching) {
-      return;
-    }
-    logger_default.info(`BrowserService: warming up browser...`);
-    this.ensureBrowser().then(() => {
-      logger_default.info(`BrowserService: warm-up complete, browser ready`);
-    }).catch((err) => {
-      logger_default.warn(`BrowserService: warm-up failed: ${err.message}, will retry on first request`);
-    });
-  }
+  /**
+   * 关闭所有会话和浏览器实例
+   */
   async close() {
-    logger_default.info("BrowserService: shutting down all sessions and browser...");
-    this.stopHealthCheck();
+    logger_default.info("BrowserService: \u6B63\u5728\u5173\u95ED\u6240\u6709\u4F1A\u8BDD\u548C\u6D4F\u89C8\u5668...");
     for (const [token] of this.sessions) {
       await this.closeSession(token);
     }
@@ -1595,15 +1846,50 @@ var BrowserService = class {
       }
       this.browser = null;
     }
-    killTrackedBrowserProcess();
-    logger_default.info("BrowserService: closed");
+    logger_default.info("BrowserService: \u5DF2\u5173\u95ED");
   }
 };
 var browserService = new BrowserService();
-browserService.warmUp();
 var browser_service_default = browserService;
 
 // src/lib/initialize.ts
+import { Pool } from "pg";
+async function initializeDatabase() {
+  if (!process.env.DATABASE_URL) {
+    logger_default.warn("DATABASE_URL not set, skipping database initialization");
+    return;
+  }
+  const pool2 = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    connectionTimeoutMillis: 5e3
+  });
+  try {
+    await pool2.query(`
+            CREATE TABLE IF NOT EXISTS video_jobs (
+                id UUID PRIMARY KEY,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                jimeng_history_id VARCHAR(255),
+                refresh_token TEXT,
+                model VARCHAR(255),
+                prompt TEXT,
+                response_format VARCHAR(50),
+                error_message TEXT,
+                result_url TEXT,
+                result_b64_json TEXT,
+                result_revised_prompt TEXT,
+                last_poll_at INTEGER
+            )
+        `);
+    logger_default.success("DB: video_jobs table initialized");
+  } catch (err) {
+    logger_default.error(`DB: failed to initialize tables: ${err.message}`);
+    throw err;
+  } finally {
+    await pool2.end();
+  }
+}
 process.setMaxListeners(Infinity);
 process.on("uncaughtException", (err, origin) => {
   logger_default.error(`An unhandled error occurred: ${origin}`, err);
@@ -1653,6 +1939,10 @@ var Request = class {
   params;
   /** 请求载荷 */
   body;
+  /** 上传的原始文件对象 */
+  rawFiles;
+  /** 按字段名归类的上传文件 */
+  filesMap;
   /** 上传的文件 */
   files;
   /** 客户端IP地址 */
@@ -1671,18 +1961,20 @@ var Request = class {
     this.params = ctx.params || {};
     this.body = ctx.request.body || {};
     const rawFiles = ctx.request.files;
+    this.rawFiles = rawFiles || {};
+    this.filesMap = {};
     if (rawFiles) {
       if (Array.isArray(rawFiles)) {
         this.files = rawFiles;
+        if (rawFiles.length > 0) this.filesMap.files = rawFiles;
       } else if (typeof rawFiles === "object") {
         const filesArray = [];
         for (const key in rawFiles) {
           const fileOrFiles = rawFiles[key];
-          if (Array.isArray(fileOrFiles)) {
-            filesArray.push(...fileOrFiles);
-          } else if (fileOrFiles) {
-            filesArray.push(fileOrFiles);
-          }
+          const normalizedFiles = Array.isArray(fileOrFiles) ? fileOrFiles.filter(Boolean) : fileOrFiles ? [fileOrFiles] : [];
+          if (normalizedFiles.length === 0) continue;
+          this.filesMap[key] = normalizedFiles;
+          filesArray.push(...normalizedFiles);
         }
         this.files = filesArray;
       } else {
@@ -2011,10 +2303,10 @@ var Server = class {
 var server_default = new Server();
 
 // src/api/routes/index.ts
-import fs9 from "fs-extra";
+import fs8 from "fs-extra";
 
 // src/api/routes/images.ts
-import fs7 from "fs";
+import fs6 from "fs";
 import _13 from "lodash";
 
 // src/api/controllers/images.ts
@@ -3561,7 +3853,7 @@ var images_default = {
             if (imageFiles.length > 10) {
               throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
             }
-            images = imageFiles.map((file) => fs7.readFileSync(file.filepath));
+            images = imageFiles.map((file) => fs6.readFileSync(file.filepath));
           }
         }
       } else {
@@ -3659,7 +3951,7 @@ var images_default = {
         if (imageFiles.length > 10) {
           throw new Error("\u6700\u591A\u652F\u630110\u5F20\u8F93\u5165\u56FE\u7247");
         }
-        images = imageFiles.map((file) => fs7.readFileSync(file.filepath));
+        images = imageFiles.map((file) => fs6.readFileSync(file.filepath));
       } else {
         const bodyImages = request2.body.images;
         if (!bodyImages || bodyImages.length === 0) {
@@ -3726,206 +4018,9 @@ import { PassThrough } from "stream";
 
 // src/api/controllers/videos.ts
 import crypto3 from "crypto";
-import fs8 from "fs";
-
-// src/lib/db.ts
-import { Pool } from "pg";
-var pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 5,
-  idleTimeoutMillis: 1e4,
-  connectionTimeoutMillis: 5e3,
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 1e4
-});
-pool.on("error", (err) => {
-  logger_default.error(`DB: pool error: ${err.message}`);
-});
-async function saveJobToDb(id, status, created) {
-  try {
-    await pool.query(
-      `INSERT INTO video_jobs (id, status, created_at, updated_at)
-             VALUES ($1, $2, $3, $3)
-             ON CONFLICT (id) DO NOTHING`,
-      [id, status, created]
-    );
-  } catch (err) {
-    logger_default.error(`DB: saveJobToDb failed for ${id}: ${err.message}`);
-  }
-}
-async function updateJobInDb(id, update) {
-  const now = Math.floor(Date.now() / 1e3);
-  const keys = Object.keys(update);
-  if (keys.length === 0) return;
-  const setClauses = keys.map((key, i) => `${key} = $${i + 2}`).join(", ");
-  const values = Object.values(update);
-  try {
-    await pool.query(
-      `UPDATE video_jobs SET ${setClauses}, updated_at = $1 WHERE id = $${values.length + 2}`,
-      [now, ...values, id]
-    );
-  } catch (err) {
-    logger_default.error(`DB: updateJobInDb failed for ${id}: ${err.message}`);
-  }
-}
-var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-async function getJobFromDb(id) {
-  if (!UUID_REGEX.test(id)) return null;
-  try {
-    const result = await pool.query(
-      `SELECT * FROM video_jobs WHERE id = $1`,
-      [id]
-    );
-    return result.rows[0] || null;
-  } catch (err) {
-    logger_default.error(`DB: getJobFromDb failed for ${id}: ${err.message}`);
-    return null;
-  }
-}
-async function getStuckJobsWithoutHistoryId(olderThanSeconds = 600) {
-  const cutoff = Math.floor(Date.now() / 1e3) - olderThanSeconds;
-  try {
-    const result = await pool.query(
-      `SELECT * FROM video_jobs
-             WHERE (status = 'processing' OR status = 'pending')
-               AND jimeng_history_id IS NULL
-               AND created_at < $1
-             ORDER BY created_at ASC`,
-      [cutoff]
-    );
-    return result.rows;
-  } catch (err) {
-    logger_default.error(`DB: getStuckJobsWithoutHistoryId failed: ${err.message}`);
-    return [];
-  }
-}
-async function getProcessingJobsWithHistoryId() {
-  try {
-    const result = await pool.query(
-      `SELECT * FROM video_jobs
-             WHERE (status = 'processing' OR status = 'pending')
-               AND jimeng_history_id IS NOT NULL
-             ORDER BY created_at ASC`
-    );
-    return result.rows;
-  } catch (err) {
-    logger_default.error(`DB: getProcessingJobsWithHistoryId failed: ${err.message}`);
-    return [];
-  }
-}
-
-// src/lib/job-store.ts
-import { v1 as uuid2 } from "uuid";
-var jobs = /* @__PURE__ */ new Map();
-var JOB_TTL_SECONDS = 24 * 60 * 60;
-var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
-setInterval(() => {
-  const now = Math.floor(Date.now() / 1e3);
-  let removed = 0;
-  for (const [id, job] of jobs.entries()) {
-    if (now - job.updated > JOB_TTL_SECONDS) {
-      jobs.delete(id);
-      removed++;
-    }
-  }
-  if (removed > 0)
-    logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
-}, CLEANUP_INTERVAL_MS);
-function dbJobToJob(dbJob) {
-  const job = {
-    id: dbJob.id,
-    status: dbJob.status,
-    created: dbJob.created_at,
-    updated: dbJob.updated_at
-  };
-  if (dbJob.error_message) {
-    job.error = dbJob.error_message;
-  }
-  if (dbJob.result_url || dbJob.result_b64_json) {
-    job.result = {
-      url: dbJob.result_url || void 0,
-      b64_json: dbJob.result_b64_json || void 0,
-      revised_prompt: dbJob.result_revised_prompt || void 0
-    };
-  }
-  return job;
-}
-function createJob() {
-  const id = uuid2();
-  const now = Math.floor(Date.now() / 1e3);
-  const job = { id, status: "pending", created: now, updated: now };
-  jobs.set(id, job);
-  saveJobToDb(id, "pending", now).catch(
-    (err) => logger_default.error(`JobStore: failed to persist job ${id} to DB: ${err.message}`)
-  );
-  return job;
-}
-function updateJob(id, update) {
-  var _a, _b, _c;
-  const job = jobs.get(id);
-  if (job) {
-    Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
-  }
-  const dbUpdate = {};
-  if (update.status) dbUpdate.status = update.status;
-  if (update.error) dbUpdate.error_message = update.error;
-  if ((_a = update.result) == null ? void 0 : _a.url) dbUpdate.result_url = update.result.url;
-  if ((_b = update.result) == null ? void 0 : _b.b64_json) dbUpdate.result_b64_json = update.result.b64_json;
-  if ((_c = update.result) == null ? void 0 : _c.revised_prompt) dbUpdate.result_revised_prompt = update.result.revised_prompt;
-  if (Object.keys(dbUpdate).length > 0) {
-    updateJobInDb(id, dbUpdate).catch(
-      (err) => logger_default.error(`JobStore: failed to sync update for job ${id} to DB: ${err.message}`)
-    );
-  }
-}
-async function getJob(id) {
-  const inMemory = jobs.get(id);
-  if (inMemory) return inMemory;
-  const dbJob = await getJobFromDb(id);
-  if (!dbJob) return void 0;
-  const job = dbJobToJob(dbJob);
-  jobs.set(id, job);
-  return job;
-}
-var BROWSER_CONCURRENCY = 1;
-var activeBrowserSlots = 0;
-var waitQueue = [];
-function updateQueuePositions() {
-  waitQueue.forEach((item, index) => {
-    const job = jobs.get(item.id);
-    if (job) {
-      job.queuePosition = index + 1;
-      job.updated = Math.floor(Date.now() / 1e3);
-    }
-  });
-}
-function acquireBrowserSlot(jobId) {
-  return new Promise((resolve) => {
-    if (activeBrowserSlots < BROWSER_CONCURRENCY && waitQueue.length === 0) {
-      activeBrowserSlots++;
-      logger_default.info(`BrowserSemaphore: slot acquired (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
-      resolve();
-    } else {
-      logger_default.info(`BrowserSemaphore: job ${jobId} waiting for slot (queue length: ${waitQueue.length + 1})`);
-      waitQueue.push({ id: jobId, resolve });
-      updateQueuePositions();
-    }
-  });
-}
-function releaseBrowserSlot() {
-  activeBrowserSlots = Math.max(0, activeBrowserSlots - 1);
-  if (waitQueue.length > 0) {
-    const { id, resolve } = waitQueue.shift();
-    const job = jobs.get(id);
-    if (job) delete job.queuePosition;
-    updateQueuePositions();
-    resolve();
-  } else {
-    logger_default.info(`BrowserSemaphore: slot released (${activeBrowserSlots}/${BROWSER_CONCURRENCY} active)`);
-  }
-}
-
-// src/api/controllers/videos.ts
+import fs7 from "fs";
+import path6 from "path";
+import { ProxyAgent as UndiciProxyAgent } from "undici";
 var DEFAULT_ASSISTANT_ID3 = 513695;
 var DEFAULT_MODEL2 = "jimeng-video-3.0";
 var DEFAULT_DRAFT_VERSION = "3.2.8";
@@ -3933,29 +4028,37 @@ var MODEL_DRAFT_VERSIONS2 = {
   "jimeng-video-3.5-pro": "3.3.4",
   "jimeng-video-3.0-pro": "3.2.8",
   "jimeng-video-3.0": "3.2.8",
-  "jimeng-video-2.0": "3.2.8",
-  "jimeng-video-2.0-pro": "3.2.8",
   // Seedance 模型（与上游 iptag/jimeng-api 保持一致）
   "jimeng-video-seedance-2.0": "3.3.9",
   "seedance-2.0": "3.3.9",
   "seedance-2.0-pro": "3.3.9",
   // Seedance 2.0-fast 模型（v1.9.3 新增）
   "jimeng-video-seedance-2.0-fast": "3.3.9",
-  "seedance-2.0-fast": "3.3.9"
+  "seedance-2.0-fast": "3.3.9",
+  // Seedance 2.0 Fast VIP Vision 模型（文生视频，model_req_key=dreamina_seedance_40_vision）
+  "jimeng-video-seedance-2.0-fast-vip": "3.3.12",
+  "seedance-2.0-fast-vip": "3.3.12",
+  // Seedance 2.0 VIP Vision 模型（主模态能力，model_req_key=dreamina_seedance_40_pro_vision）
+  "jimeng-video-seedance-2.0-vip": "3.3.12",
+  "seedance-2.0-vip": "3.3.12"
 };
 var MODEL_MAP2 = {
   "jimeng-video-3.5-pro": "dreamina_ic_generate_video_model_vgfm_3.5_pro",
   "jimeng-video-3.0-pro": "dreamina_ic_generate_video_model_vgfm_3.0_pro",
   "jimeng-video-3.0": "dreamina_ic_generate_video_model_vgfm_3.0",
-  "jimeng-video-2.0": "dreamina_ic_generate_video_model_vgfm_lite",
-  "jimeng-video-2.0-pro": "dreamina_ic_generate_video_model_vgfm1.0",
-  // Seedance 多图智能video生成模型（jimeng-video-seedance-2.0 为上游标准名称）
+  // Seedance 多图智能视频生成模型（jimeng-video-seedance-2.0 为上游标准名称）
   "jimeng-video-seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0": "dreamina_seedance_40_pro",
   "seedance-2.0-pro": "dreamina_seedance_40_pro",
   // Seedance 2.0-fast 快速生成模型（v1.9.3 新增，内部模型为 dreamina_seedance_40）
   "jimeng-video-seedance-2.0-fast": "dreamina_seedance_40",
-  "seedance-2.0-fast": "dreamina_seedance_40"
+  "seedance-2.0-fast": "dreamina_seedance_40",
+  // Seedance 2.0 Fast VIP Vision 文生视频模型（内部模型为 dreamina_seedance_40_vision）
+  "jimeng-video-seedance-2.0-fast-vip": "dreamina_seedance_40_vision",
+  "seedance-2.0-fast-vip": "dreamina_seedance_40_vision",
+  // Seedance 2.0 VIP Vision 文生视频模型（内部模型为 dreamina_seedance_40_pro_vision）
+  "jimeng-video-seedance-2.0-vip": "dreamina_seedance_40_pro_vision",
+  "seedance-2.0-vip": "dreamina_seedance_40_pro_vision"
 };
 var SEEDANCE_BENEFIT_TYPE_MAP = {
   "jimeng-video-seedance-2.0": "dreamina_video_seedance_20_pro",
@@ -3963,10 +4066,65 @@ var SEEDANCE_BENEFIT_TYPE_MAP = {
   "seedance-2.0-pro": "dreamina_video_seedance_20_pro",
   // Seedance 2.0-fast（v1.9.3 新增，注意：无 "video_" 前缀）
   "jimeng-video-seedance-2.0-fast": "dreamina_seedance_20_fast",
-  "seedance-2.0-fast": "dreamina_seedance_20_fast"
+  "seedance-2.0-fast": "dreamina_seedance_20_fast",
+  // Seedance 2.0 Fast VIP Vision（benefit_type 与国际版一致：seedance_20_fast_720p_output）
+  "jimeng-video-seedance-2.0-fast-vip": "seedance_20_fast_720p_output",
+  "seedance-2.0-fast-vip": "seedance_20_fast_720p_output",
+  // Seedance 2.0 VIP Vision（主模态能力，benefit_type：seedance_20_pro_720p_output）
+  "jimeng-video-seedance-2.0-vip": "seedance_20_pro_720p_output",
+  "seedance-2.0-vip": "seedance_20_pro_720p_output"
 };
+var INTERNATIONAL_VIDEO_MODEL_MAP = {
+  "jimeng-video-3.5-pro": "dreamina_ic_generate_video_model_vgfm_3.5_pro",
+  "jimeng-video-3.0-pro": "dreamina_ic_generate_video_model_vgfm_3.0_pro",
+  "jimeng-video-3.0": "dreamina_ic_generate_video_model_vgfm_3.0"
+};
+var INTERNATIONAL_SEEDANCE_MODEL_MAP = {
+  "jimeng-video-seedance-2.0": "dreamina_seedance_40_pro",
+  "seedance-2.0-pro": "dreamina_seedance_40_pro",
+  "jimeng-video-seedance-2.0-fast": "dreamina_seedance_40",
+  "seedance-2.0-fast": "dreamina_seedance_40",
+  "jimeng-video-seedance-2.0-fast-vip": "dreamina_seedance_40_vision",
+  "seedance-2.0-fast-vip": "dreamina_seedance_40_vision",
+  "jimeng-video-seedance-2.0-vip": "dreamina_seedance_40_pro_vision",
+  "seedance-2.0-vip": "dreamina_seedance_40_pro_vision"
+};
+var INTERNATIONAL_SEEDANCE_BENEFIT_TYPE_MAP = {
+  "jimeng-video-seedance-2.0": "seedance_20_pro_720p_output",
+  "seedance-2.0-pro": "seedance_20_pro_720p_output",
+  "jimeng-video-seedance-2.0-fast": "seedance_20_fast_720p_output",
+  "seedance-2.0-fast": "seedance_20_fast_720p_output",
+  "jimeng-video-seedance-2.0-fast-vip": "seedance_20_fast_720p_output",
+  "seedance-2.0-fast-vip": "seedance_20_fast_720p_output",
+  "jimeng-video-seedance-2.0-vip": "seedance_20_pro_720p_output",
+  "seedance-2.0-vip": "seedance_20_pro_720p_output"
+};
+function getVideoBenefitType(model) {
+  if (model.includes("3.5_pro")) {
+    return "dreamina_video_seedance_15_pro";
+  }
+  if (model.includes("3.5")) {
+    return "dreamina_video_seedance_15";
+  }
+  return "basic_video_operation_vgfm_v_three";
+}
+function getInternationalVideoDraftVersion(_model) {
+  if (Object.prototype.hasOwnProperty.call(INTERNATIONAL_VIDEO_MODEL_MAP, _model)) {
+    return "3.3.12";
+  }
+  return MODEL_DRAFT_VERSIONS2[_model] || DEFAULT_DRAFT_VERSION;
+}
 function isSeedanceModel(model) {
   return model.startsWith("seedance-") || model.startsWith("jimeng-video-seedance-");
+}
+function isInternationalVideoModel(model) {
+  return Object.prototype.hasOwnProperty.call(INTERNATIONAL_VIDEO_MODEL_MAP, model) || Object.prototype.hasOwnProperty.call(INTERNATIONAL_SEEDANCE_MODEL_MAP, model);
+}
+function getInternationalVideoModel(model) {
+  return INTERNATIONAL_VIDEO_MODEL_MAP[model] || INTERNATIONAL_SEEDANCE_MODEL_MAP[model];
+}
+function isInternationalSeedanceModel(model) {
+  return Object.prototype.hasOwnProperty.call(INTERNATIONAL_SEEDANCE_MODEL_MAP, model);
 }
 var MIME_TO_MATERIAL_TYPE = {
   "image/jpeg": "image",
@@ -4050,12 +4208,12 @@ function resolveVideoResolution(resolution = "720p", ratio = "1:1") {
   const resolutionGroup = VIDEO_RESOLUTION_OPTIONS[resolution];
   if (!resolutionGroup) {
     const supportedResolutions = Object.keys(VIDEO_RESOLUTION_OPTIONS).join(", ");
-    throw new Error(`Unsupported video resolution "${resolution}". Supported resolutions: ${supportedResolutions}`);
+    throw new Error(`\u4E0D\u652F\u6301\u7684\u89C6\u9891\u5206\u8FA8\u7387 "${resolution}"\u3002\u652F\u6301\u7684\u5206\u8FA8\u7387: ${supportedResolutions}`);
   }
   const ratioConfig = resolutionGroup[ratio];
   if (!ratioConfig) {
     const supportedRatios = Object.keys(resolutionGroup).join(", ");
-    throw new Error(`Unsupported ratio "${ratio}" for resolution "${resolution}". Supported ratios: ${supportedRatios}`);
+    throw new Error(`\u5728 "${resolution}" \u5206\u8FA8\u7387\u4E0B\uFF0C\u4E0D\u652F\u6301\u7684\u6BD4\u4F8B "${ratio}"\u3002\u652F\u6301\u7684\u6BD4\u4F8B: ${supportedRatios}`);
   }
   return {
     width: ratioConfig.width,
@@ -4064,6 +4222,64 @@ function resolveVideoResolution(resolution = "720p", ratio = "1:1") {
 }
 function getModel2(model) {
   return MODEL_MAP2[model] || MODEL_MAP2[DEFAULT_MODEL2];
+}
+var BASE_URL_IMAGEX_SG = "https://imagex-normal-sg.capcutapi.com";
+var BASE_URL_IMAGEX_US = "https://imagex16-normal-us-ttp.capcutapi.us";
+function getUploadAWSRegion(regionInfo) {
+  if (regionInfo.isUS) return "us-east-1";
+  if (regionInfo.isInternational) return "ap-southeast-1";
+  return "cn-north-1";
+}
+function getImageXHost(regionInfo) {
+  if (regionInfo.isCN) return "https://imagex.bytedanceapi.com";
+  if (regionInfo.isUS) return BASE_URL_IMAGEX_US;
+  return BASE_URL_IMAGEX_SG;
+}
+function getUploadOrigin(regionInfo) {
+  if (regionInfo.isUS) return "https://dreamina-api.us.capcut.com";
+  if (regionInfo.isInternational) return "https://mweb-api-sg.capcut.com";
+  return "https://jimeng.jianying.com";
+}
+function getUploadReferer(regionInfo) {
+  const origin = getUploadOrigin(regionInfo);
+  return `${origin}/ai-tool/video/generate`;
+}
+function resolveServiceId(tokenResult, regionInfo) {
+  const rawServiceId = regionInfo.isInternational ? tokenResult.space_name : tokenResult.service_id;
+  if (rawServiceId) return rawServiceId;
+  return regionInfo.isInternational ? "wopfjsm1ax" : "tb4s082cfz";
+}
+var _proxyDispatcher = void 0;
+function getProxyDispatcher() {
+  if (_proxyDispatcher !== void 0) return _proxyDispatcher;
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY || process.env.all_proxy;
+  if (proxyUrl) {
+    try {
+      _proxyDispatcher = new UndiciProxyAgent(proxyUrl);
+      logger_default.info(`\u4E0A\u4F20\u4EE3\u7406\u5DF2\u542F\u7528: ${proxyUrl}`);
+    } catch (e) {
+      logger_default.warn(`\u521B\u5EFA\u4EE3\u7406 dispatcher \u5931\u8D25: ${e.message}`);
+      _proxyDispatcher = null;
+    }
+  } else {
+    _proxyDispatcher = null;
+  }
+  return _proxyDispatcher;
+}
+async function proxyFetch(url, init) {
+  const dispatcher = getProxyDispatcher();
+  if (dispatcher && init) {
+    init.dispatcher = dispatcher;
+  } else if (dispatcher && !init) {
+    init = { dispatcher };
+  }
+  return fetch(url, init);
+}
+async function cnFetch(url, init) {
+  return fetch(url, init);
+}
+function regionFetch(regionInfo) {
+  return (regionInfo == null ? void 0 : regionInfo.isInternational) ? proxyFetch : cnFetch;
 }
 function createSignature2(method, url, headers, accessKeyId, secretAccessKey, sessionToken, payload = "", awsRegion = "cn-north-1", serviceName = "imagex") {
   const urlObj = new URL(url);
@@ -4136,48 +4352,54 @@ function calculateCRC322(buffer) {
   }
   return ((crc ^ -1) >>> 0).toString(16).padStart(8, "0");
 }
-async function uploadImageForVideo(imageUrl, refreshToken) {
+async function uploadImageForVideo(imageUrl, refreshToken, regionInfo) {
   var _a, _b, _c, _d, _e, _f;
   try {
-    logger_default.info(`Uploading image: ${imageUrl}`);
+    logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u89C6\u9891\u56FE\u7247: ${imageUrl}`);
+    const ri = regionInfo || parseRegionFromToken(refreshToken);
+    const rf = regionFetch(ri);
+    const awsRegion = getUploadAWSRegion(ri);
+    const imageXHost = getImageXHost(ri);
+    const uploadOrigin = getUploadOrigin(ri);
+    const uploadReferer = getUploadReferer(ri);
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2
         // AIGC 图片上传场景
       }
     });
-    const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
+    const { access_key_id, secret_access_key, session_token, service_id, space_name } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("Failed to get upload token");
+      throw new Error("\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25");
     }
-    const actualServiceId = service_id || "tb4s082cfz";
-    logger_default.info(`Upload token obtained: service_id=${actualServiceId}`);
+    const actualServiceId = resolveServiceId(tokenResult, ri);
+    logger_default.info(`\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: service_id=${actualServiceId}`);
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
-      throw new Error(`Image download failed: ${imageResponse.status}`);
+      throw new Error(`\u4E0B\u8F7D\u56FE\u7247\u5931\u8D25: ${imageResponse.status}`);
     }
     const imageBuffer = await imageResponse.arrayBuffer();
     const fileSize = imageBuffer.byteLength;
     const crc32 = calculateCRC322(imageBuffer);
-    logger_default.info(`Image downloaded: size=${fileSize} bytes, CRC32=${crc32}`);
+    logger_default.info(`\u56FE\u7247\u4E0B\u8F7D\u5B8C\u6210: \u5927\u5C0F=${fileSize}\u5B57\u8282, CRC32=${crc32}`);
     const now = /* @__PURE__ */ new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const randomStr = Math.random().toString(36).substring(2, 12);
-    const applyUrl = `https://imagex.bytedanceapi.com/?Action=ApplyImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}&FileSize=${fileSize}&s=${randomStr}`;
+    const applyUrl = `${imageXHost}/?Action=ApplyImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}&FileSize=${fileSize}&s=${randomStr}${ri.isInternational ? "&device_platform=web" : ""}`;
     const requestHeaders = {
       "x-amz-date": timestamp,
       "x-amz-security-token": session_token
     };
-    const authorization = createSignature2("GET", applyUrl, requestHeaders, access_key_id, secret_access_key, session_token);
-    logger_default.info(`Requesting upload auth: ${applyUrl}`);
-    const applyResponse = await fetch(applyUrl, {
+    const authorization = createSignature2("GET", applyUrl, requestHeaders, access_key_id, secret_access_key, session_token, "", awsRegion, "imagex");
+    logger_default.info(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650: ${applyUrl}`);
+    const applyResponse = await rf(applyUrl, {
       method: "GET",
       headers: {
         "accept": "*/*",
         "accept-language": "zh-CN,zh;q=0.9",
         "authorization": authorization,
-        "origin": "https://jimeng.jianying.com",
-        "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "origin": uploadOrigin,
+        "referer": uploadReferer,
         "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
@@ -4191,24 +4413,24 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
     }
     const applyResult = await applyResponse.json();
     if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
-    logger_default.info(`Upload auth granted`);
+    logger_default.info(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u6210\u529F`);
     const uploadAddress = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
+      throw new Error(`\u83B7\u53D6\u4E0A\u4F20\u5730\u5740\u5931\u8D25: ${JSON.stringify(applyResult)}`);
     }
     const storeInfo = uploadAddress.StoreInfos[0];
     const uploadHost = uploadAddress.UploadHosts[0];
     const auth = storeInfo.Auth;
     const uploadUrl = `https://${uploadHost}/upload/v1/${storeInfo.StoreUri}`;
     const imageId = storeInfo.StoreUri.split("/").pop();
-    logger_default.info(`Uploading image: imageId=${imageId}, url=${uploadUrl}`);
-    const uploadResponse = await fetch(uploadUrl, {
+    logger_default.info(`\u51C6\u5907\u4E0A\u4F20\u56FE\u7247: imageId=${imageId}, uploadUrl=${uploadUrl}`);
+    const uploadResponse = await rf(uploadUrl, {
       method: "POST",
       headers: {
         "Accept": "*/*",
@@ -4218,8 +4440,8 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
         "Content-CRC32": crc32,
         "Content-Disposition": 'attachment; filename="undefined"',
         "Content-Type": "application/octet-stream",
-        "Origin": "https://jimeng.jianying.com",
-        "Referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "Origin": uploadOrigin,
+        "Referer": uploadReferer,
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "cross-site",
@@ -4230,10 +4452,10 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
     }
-    logger_default.info(`Image file uploaded successfully`);
-    const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
+    logger_default.info(`\u56FE\u7247\u6587\u4EF6\u4E0A\u4F20\u6210\u529F`);
+    const commitUrl = `${imageXHost}/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
     const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const commitPayload = JSON.stringify({
       SessionKey: uploadAddress.SessionKey,
@@ -4245,16 +4467,16 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
       "x-amz-security-token": session_token,
       "x-amz-content-sha256": payloadHash
     };
-    const commitAuthorization = createSignature2("POST", commitUrl, commitRequestHeaders, access_key_id, secret_access_key, session_token, commitPayload);
-    const commitResponse = await fetch(commitUrl, {
+    const commitAuthorization = createSignature2("POST", commitUrl, commitRequestHeaders, access_key_id, secret_access_key, session_token, commitPayload, awsRegion, "imagex");
+    const commitResponse = await rf(commitUrl, {
       method: "POST",
       headers: {
         "accept": "*/*",
         "accept-language": "zh-CN,zh;q=0.9",
         "authorization": commitAuthorization,
         "content-type": "application/json",
-        "origin": "https://jimeng.jianying.com",
-        "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "origin": uploadOrigin,
+        "referer": uploadReferer,
         "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
@@ -4270,67 +4492,73 @@ async function uploadImageForVideo(imageUrl, refreshToken) {
     });
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
     }
     const commitResult = await commitResponse.json();
     if ((_c = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _c.Error) {
-      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
     if (!((_d = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _d.Results) || commitResult.Result.Results.length === 0) {
-      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
     }
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2e3) {
-      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u72B6\u6001\u5F02\u5E38: UriStatus=${uploadResult.UriStatus}`);
     }
     const fullImageUri = uploadResult.Uri;
     const pluginResult = (_f = (_e = commitResult.Result) == null ? void 0 : _e.PluginResult) == null ? void 0 : _f[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger_default.info(`Image upload complete: ${pluginResult.ImageUri}`);
+      logger_default.info(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
-    logger_default.info(`Image upload complete: ${fullImageUri}`);
+    logger_default.info(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${fullImageUri}`);
     return fullImageUri;
   } catch (error) {
-    logger_default.error(`Image upload failed: ${error.message}`);
+    logger_default.error(`\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
     throw error;
   }
 }
-async function uploadImageBufferForVideo(buffer, refreshToken) {
+async function uploadImageBufferForVideo(buffer, refreshToken, regionInfo) {
   var _a, _b, _c, _d, _e, _f;
   try {
-    logger_default.info(`Uploading image from buffer, size: ${buffer.length} bytes`);
+    logger_default.info(`\u5F00\u59CB\u4ECEBuffer\u4E0A\u4F20\u89C6\u9891\u56FE\u7247\uFF0C\u5927\u5C0F: ${buffer.length}\u5B57\u8282`);
+    const ri = regionInfo || parseRegionFromToken(refreshToken);
+    const rf = regionFetch(ri);
+    const awsRegion = getUploadAWSRegion(ri);
+    const imageXHost = getImageXHost(ri);
+    const uploadOrigin = getUploadOrigin(ri);
+    const uploadReferer = getUploadReferer(ri);
     const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
       data: {
         scene: 2
       }
     });
-    const { access_key_id, secret_access_key, session_token, service_id } = tokenResult;
+    const { access_key_id, secret_access_key, session_token, service_id, space_name } = tokenResult;
     if (!access_key_id || !secret_access_key || !session_token) {
-      throw new Error("Failed to get upload token");
+      throw new Error("\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25");
     }
-    const actualServiceId = service_id || "tb4s082cfz";
-    logger_default.info(`Upload token obtained: service_id=${actualServiceId}`);
+    const actualServiceId = resolveServiceId(tokenResult, ri);
+    logger_default.info(`\u83B7\u53D6\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: service_id=${actualServiceId}`);
     const fileSize = buffer.length;
     const crc32 = calculateCRC322(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-    logger_default.info(`Buffer size: ${fileSize} bytes, CRC32=${crc32}`);
+    logger_default.info(`Buffer\u5927\u5C0F: ${fileSize}\u5B57\u8282, CRC32=${crc32}`);
     const now = /* @__PURE__ */ new Date();
     const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const randomStr = Math.random().toString(36).substring(2, 12);
-    const applyUrl = `https://imagex.bytedanceapi.com/?Action=ApplyImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}&FileSize=${fileSize}&s=${randomStr}`;
+    const applyUrl = `${imageXHost}/?Action=ApplyImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}&FileSize=${fileSize}&s=${randomStr}${ri.isInternational ? "&device_platform=web" : ""}`;
     const requestHeaders = {
       "x-amz-date": timestamp,
       "x-amz-security-token": session_token
     };
-    const authorization = createSignature2("GET", applyUrl, requestHeaders, access_key_id, secret_access_key, session_token);
-    const applyResponse = await fetch(applyUrl, {
+    const authorization = createSignature2("GET", applyUrl, requestHeaders, access_key_id, secret_access_key, session_token, "", awsRegion, "imagex");
+    const applyResponse = await rf(applyUrl, {
       method: "GET",
       headers: {
         "accept": "*/*",
         "accept-language": "zh-CN,zh;q=0.9",
         "authorization": authorization,
-        "origin": "https://jimeng.jianying.com",
-        "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "origin": uploadOrigin,
+        "referer": uploadReferer,
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
         "x-amz-date": timestamp,
         "x-amz-security-token": session_token
@@ -4338,21 +4566,21 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     if (!applyResponse.ok) {
       const errorText = await applyResponse.text();
-      throw new Error(`Upload auth request failed: ${applyResponse.status} - ${errorText}`);
+      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
     }
     const applyResult = await applyResponse.json();
     if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-      throw new Error(`Upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+      throw new Error(`\u7533\u8BF7\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
     }
     const uploadAddress = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.UploadAddress;
     if (!uploadAddress || !uploadAddress.StoreInfos || !uploadAddress.UploadHosts) {
-      throw new Error(`Failed to get upload endpoint: ${JSON.stringify(applyResult)}`);
+      throw new Error(`\u83B7\u53D6\u4E0A\u4F20\u5730\u5740\u5931\u8D25: ${JSON.stringify(applyResult)}`);
     }
     const storeInfo = uploadAddress.StoreInfos[0];
     const uploadHost = uploadAddress.UploadHosts[0];
     const auth = storeInfo.Auth;
     const uploadUrl = `https://${uploadHost}/upload/v1/${storeInfo.StoreUri}`;
-    const uploadResponse = await fetch(uploadUrl, {
+    const uploadResponse = await rf(uploadUrl, {
       method: "POST",
       headers: {
         "Accept": "*/*",
@@ -4360,18 +4588,18 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
         "Content-CRC32": crc32,
         "Content-Disposition": 'attachment; filename="undefined"',
         "Content-Type": "application/octet-stream",
-        "Origin": "https://jimeng.jianying.com",
-        "Referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "Origin": uploadOrigin,
+        "Referer": uploadReferer,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
       },
       body: buffer
     });
     if (!uploadResponse.ok) {
       const errorText = await uploadResponse.text();
-      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
+      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
     }
-    logger_default.info(`BufferImage file uploaded successfully`);
-    const commitUrl = `https://imagex.bytedanceapi.com/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
+    logger_default.info(`Buffer\u56FE\u7247\u6587\u4EF6\u4E0A\u4F20\u6210\u529F`);
+    const commitUrl = `${imageXHost}/?Action=CommitImageUpload&Version=2018-08-01&ServiceId=${actualServiceId}`;
     const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
     const commitPayload = JSON.stringify({
       SessionKey: uploadAddress.SessionKey,
@@ -4383,15 +4611,15 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
       "x-amz-security-token": session_token,
       "x-amz-content-sha256": payloadHash
     };
-    const commitAuthorization = createSignature2("POST", commitUrl, commitRequestHeaders, access_key_id, secret_access_key, session_token, commitPayload);
-    const commitResponse = await fetch(commitUrl, {
+    const commitAuthorization = createSignature2("POST", commitUrl, commitRequestHeaders, access_key_id, secret_access_key, session_token, commitPayload, awsRegion, "imagex");
+    const commitResponse = await rf(commitUrl, {
       method: "POST",
       headers: {
         "accept": "*/*",
         "authorization": commitAuthorization,
         "content-type": "application/json",
-        "origin": "https://jimeng.jianying.com",
-        "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+        "origin": uploadOrigin,
+        "referer": uploadReferer,
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
         "x-amz-date": commitTimestamp,
         "x-amz-security-token": session_token,
@@ -4401,29 +4629,29 @@ async function uploadImageBufferForVideo(buffer, refreshToken) {
     });
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
-      throw new Error(`Upload commit failed: ${commitResponse.status} - ${errorText}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
     }
     const commitResult = await commitResponse.json();
     if ((_c = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _c.Error) {
-      throw new Error(`Upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
     }
     if (!((_d = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _d.Results) || commitResult.Result.Results.length === 0) {
-      throw new Error(`Upload commit response missing result: ${JSON.stringify(commitResult)}`);
+      throw new Error(`\u63D0\u4EA4\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
     }
     const uploadResult = commitResult.Result.Results[0];
     if (uploadResult.UriStatus !== 2e3) {
-      throw new Error(`Image upload status error: UriStatus=${uploadResult.UriStatus}`);
+      throw new Error(`\u56FE\u7247\u4E0A\u4F20\u72B6\u6001\u5F02\u5E38: UriStatus=${uploadResult.UriStatus}`);
     }
     const fullImageUri = uploadResult.Uri;
     const pluginResult = (_f = (_e = commitResult.Result) == null ? void 0 : _e.PluginResult) == null ? void 0 : _f[0];
     if (pluginResult && pluginResult.ImageUri) {
-      logger_default.info(`BufferImage upload complete: ${pluginResult.ImageUri}`);
+      logger_default.info(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${pluginResult.ImageUri}`);
       return pluginResult.ImageUri;
     }
-    logger_default.info(`BufferImage upload complete: ${fullImageUri}`);
+    logger_default.info(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210: ${fullImageUri}`);
     return fullImageUri;
   } catch (error) {
-    logger_default.error(`BufferImage upload failed: ${error.message}`);
+    logger_default.error(`Buffer\u89C6\u9891\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
     throw error;
   }
 }
@@ -4449,20 +4677,25 @@ function parseAudioDuration(buffer) {
     return 0;
   }
 }
-async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
+async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename, regionInfo) {
   var _a, _b, _c, _d, _e, _f, _g;
-  const label = mediaType === "audio" ? "audio" : "video";
+  const label = mediaType === "audio" ? "\u97F3\u9891" : "\u89C6\u9891";
   const fileSize = buffer.length;
-  logger_default.info(`Uploading ${label}file, size: ${fileSize} bytes`);
+  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6\uFF0C\u5927\u5C0F: ${fileSize} \u5B57\u8282`);
+  const ri = regionInfo || parseRegionFromToken(refreshToken);
+  const rf = regionFetch(ri);
+  const awsRegion = getUploadAWSRegion(ri);
+  const uploadOrigin = getUploadOrigin(ri);
+  const uploadReferer = getUploadReferer(ri);
   const tokenResult = await request("post", "/mweb/v1/get_upload_token", refreshToken, {
     data: { scene: 1 }
   });
   const { access_key_id, secret_access_key, session_token, space_name } = tokenResult;
   if (!access_key_id || !secret_access_key || !session_token) {
-    throw new Error(`Failed to get ${label} upload token`);
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u5931\u8D25`);
   }
   const spaceName = space_name || "dreamina";
-  logger_default.info(`Getting ${label} upload token: spaceName=${spaceName}`);
+  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u4EE4\u724C\u6210\u529F: spaceName=${spaceName}`);
   const now = /* @__PURE__ */ new Date();
   const timestamp = now.toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
   const randomStr = Math.random().toString(36).substring(2, 12);
@@ -4480,18 +4713,18 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
     secret_access_key,
     session_token,
     "",
-    "cn-north-1",
+    awsRegion,
     "vod"
   );
-  logger_default.info(`Requesting ${label} upload auth: ${applyUrl}`);
-  const applyResponse = await fetch(applyUrl, {
+  logger_default.info(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650: ${applyUrl}`);
+  const applyResponse = await rf(applyUrl, {
     method: "GET",
     headers: {
       "accept": "*/*",
       "accept-language": "zh-CN,zh;q=0.9",
       "authorization": authorization,
-      "origin": "https://jimeng.jianying.com",
-      "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "origin": uploadOrigin,
+      "referer": uploadReferer,
       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
       "x-amz-date": timestamp,
       "x-amz-security-token": session_token
@@ -4499,52 +4732,52 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   });
   if (!applyResponse.ok) {
     const errorText = await applyResponse.text();
-    throw new Error(`${label} upload auth request failed: ${applyResponse.status} - ${errorText}`);
+    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${applyResponse.status} - ${errorText}`);
   }
   const applyResult = await applyResponse.json();
   if ((_a = applyResult == null ? void 0 : applyResult.ResponseMetadata) == null ? void 0 : _a.Error) {
-    throw new Error(`${label} upload auth request failed: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
+    throw new Error(`\u7533\u8BF7${label}\u4E0A\u4F20\u6743\u9650\u5931\u8D25: ${JSON.stringify(applyResult.ResponseMetadata.Error)}`);
   }
   const uploadNodes = (_c = (_b = applyResult == null ? void 0 : applyResult.Result) == null ? void 0 : _b.InnerUploadAddress) == null ? void 0 : _c.UploadNodes;
   if (!uploadNodes || uploadNodes.length === 0) {
-    throw new Error(`Failed to get ${label} upload endpoint: ${JSON.stringify(applyResult)}`);
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u5931\u8D25: ${JSON.stringify(applyResult)}`);
   }
   const uploadNode = uploadNodes[0];
   const storeInfo = (_d = uploadNode.StoreInfos) == null ? void 0 : _d[0];
   if (!storeInfo) {
-    throw new Error(`Failed to get ${label} upload storage info: ${JSON.stringify(uploadNode)}`);
+    throw new Error(`\u83B7\u53D6${label}\u4E0A\u4F20\u5B58\u50A8\u4FE1\u606F\u5931\u8D25: ${JSON.stringify(uploadNode)}`);
   }
   const uploadHost = uploadNode.UploadHost;
   const storeUri = storeInfo.StoreUri;
   const auth = storeInfo.Auth;
   const sessionKey = uploadNode.SessionKey;
   const vid = uploadNode.Vid;
-  logger_default.info(`Getting ${label} upload endpoint: host=${uploadHost}, vid=${vid}`);
+  logger_default.info(`\u83B7\u53D6${label}\u4E0A\u4F20\u8282\u70B9\u6210\u529F: host=${uploadHost}, vid=${vid}`);
   const uploadUrl = `https://${uploadHost}/upload/v1/${storeUri}`;
   const crc32 = calculateCRC322(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-  logger_default.info(`Uploading ${label}file: ${uploadUrl}, CRC32=${crc32}`);
-  const uploadResponse = await fetch(uploadUrl, {
+  logger_default.info(`\u5F00\u59CB\u4E0A\u4F20${label}\u6587\u4EF6: ${uploadUrl}, CRC32=${crc32}`);
+  const uploadResponse = await rf(uploadUrl, {
     method: "POST",
     headers: {
       "Accept": "*/*",
       "Authorization": auth,
       "Content-CRC32": crc32,
       "Content-Type": "application/octet-stream",
-      "Origin": "https://jimeng.jianying.com",
-      "Referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "Origin": uploadOrigin,
+      "Referer": uploadReferer,
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
     },
     body: buffer
   });
   if (!uploadResponse.ok) {
     const errorText = await uploadResponse.text();
-    throw new Error(`${label} file upload failed: ${uploadResponse.status} - ${errorText}`);
+    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${uploadResponse.status} - ${errorText}`);
   }
   const uploadData = await uploadResponse.json();
   if ((uploadData == null ? void 0 : uploadData.code) !== 2e3) {
-    throw new Error(`${label} file upload failed: code=${uploadData == null ? void 0 : uploadData.code}, message=${uploadData == null ? void 0 : uploadData.message}`);
+    throw new Error(`${label}\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: code=${uploadData == null ? void 0 : uploadData.code}, message=${uploadData == null ? void 0 : uploadData.message}`);
   }
-  logger_default.info(`${label}file uploaded, crc32=${(_e = uploadData.data) == null ? void 0 : _e.crc32}`);
+  logger_default.info(`${label}\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: crc32=${(_e = uploadData.data) == null ? void 0 : _e.crc32}`);
   const commitUrl = `${vodHost}/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=${spaceName}`;
   const commitTimestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:\-]/g, "").replace(/\.\d{3}Z$/, "Z");
   const commitPayload = JSON.stringify({
@@ -4565,18 +4798,18 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
     secret_access_key,
     session_token,
     commitPayload,
-    "cn-north-1",
+    awsRegion,
     "vod"
   );
-  logger_default.info(`Committing ${label} upload: ${commitUrl}`);
-  const commitResponse = await fetch(commitUrl, {
+  logger_default.info(`\u63D0\u4EA4${label}\u4E0A\u4F20\u786E\u8BA4: ${commitUrl}`);
+  const commitResponse = await rf(commitUrl, {
     method: "POST",
     headers: {
       "accept": "*/*",
       "authorization": commitAuthorization,
       "content-type": "application/json",
-      "origin": "https://jimeng.jianying.com",
-      "referer": "https://jimeng.jianying.com/ai-tool/video/generate",
+      "origin": uploadOrigin,
+      "referer": uploadReferer,
       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
       "x-amz-date": commitTimestamp,
       "x-amz-security-token": session_token,
@@ -4586,26 +4819,26 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   });
   if (!commitResponse.ok) {
     const errorText = await commitResponse.text();
-    throw new Error(`${label} upload commit failed: ${commitResponse.status} - ${errorText}`);
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${commitResponse.status} - ${errorText}`);
   }
   const commitResult = await commitResponse.json();
   if ((_f = commitResult == null ? void 0 : commitResult.ResponseMetadata) == null ? void 0 : _f.Error) {
-    throw new Error(`${label} upload commit failed: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u5931\u8D25: ${JSON.stringify(commitResult.ResponseMetadata.Error)}`);
   }
   if (!((_g = commitResult == null ? void 0 : commitResult.Result) == null ? void 0 : _g.Results) || commitResult.Result.Results.length === 0) {
-    throw new Error(`${label} upload commit response missing result: ${JSON.stringify(commitResult)}`);
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11\u7ED3\u679C: ${JSON.stringify(commitResult)}`);
   }
   const result = commitResult.Result.Results[0];
   if (!result.Vid) {
-    throw new Error(`${label} upload commit response missing Vid: ${JSON.stringify(result)}`);
+    throw new Error(`\u63D0\u4EA4${label}\u4E0A\u4F20\u54CD\u5E94\u7F3A\u5C11 Vid: ${JSON.stringify(result)}`);
   }
   const videoMeta = result.VideoMeta || {};
   let duration = videoMeta.Duration ? Math.round(videoMeta.Duration * 1e3) : 0;
   if (duration <= 0 && mediaType === "audio") {
     duration = parseAudioDuration(buffer);
-    logger_default.info(`VOD did not return ${label} duration, parsed locally: ${duration}ms`);
+    logger_default.info(`VOD \u672A\u8FD4\u56DE${label}\u65F6\u957F\uFF0C\u672C\u5730\u89E3\u6790: ${duration}ms`);
   }
-  logger_default.info(`${label} upload complete: vid=${result.Vid}, duration=${duration}ms`);
+  logger_default.info(`${label}\u4E0A\u4F20\u5B8C\u6210: vid=${result.Vid}, duration=${duration}ms`);
   return {
     vid: result.Vid,
     width: videoMeta.Width || 0,
@@ -4615,9 +4848,11 @@ async function uploadMediaForVideo(buffer, mediaType, refreshToken, filename) {
   };
 }
 async function fetchHighQualityVideoUrl(itemId, refreshToken) {
-  var _a, _b, _c, _d, _e, _f;
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i;
   try {
-    logger_default.info(`Fetching HQ video download URL, item_id: ${itemId}`);
+    logger_default.info(`\u5C1D\u8BD5\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891\u4E0B\u8F7DURL\uFF0Citem_id: ${itemId}`);
+    const regionInfo = parseRegionFromToken(refreshToken);
+    const isInternational = regionInfo.isInternational || regionInfo.isUS;
     const result = await request("post", "/mweb/v1/get_local_item_list", refreshToken, {
       data: {
         item_id_list: [itemId],
@@ -4629,35 +4864,85 @@ async function fetchHighQualityVideoUrl(itemId, refreshToken) {
       }
     });
     const responseStr = JSON.stringify(result);
-    logger_default.info(`get_local_item_list response size: ${responseStr.length} chars`);
+    logger_default.info(`get_local_item_list \u54CD\u5E94\u5927\u5C0F: ${responseStr.length} \u5B57\u7B26`);
+    let videoUrl = null;
     const itemList = result.item_list || result.local_item_list || [];
     if (itemList.length > 0) {
       const item = itemList[0];
-      const videoUrl = ((_c = (_b = (_a = item == null ? void 0 : item.video) == null ? void 0 : _a.transcoded_video) == null ? void 0 : _b.origin) == null ? void 0 : _c.video_url) || ((_d = item == null ? void 0 : item.video) == null ? void 0 : _d.download_url) || ((_e = item == null ? void 0 : item.video) == null ? void 0 : _e.play_url) || ((_f = item == null ? void 0 : item.video) == null ? void 0 : _f.url);
+      videoUrl = ((_c = (_b = (_a = item == null ? void 0 : item.common_attr) == null ? void 0 : _a.transcoded_video) == null ? void 0 : _b.origin) == null ? void 0 : _c.video_url) || (item == null ? void 0 : item.result_url) || ((_f = (_e = (_d = item == null ? void 0 : item.video) == null ? void 0 : _d.transcoded_video) == null ? void 0 : _e.origin) == null ? void 0 : _f.video_url) || ((_g = item == null ? void 0 : item.video) == null ? void 0 : _g.download_url) || ((_h = item == null ? void 0 : item.video) == null ? void 0 : _h.play_url) || ((_i = item == null ? void 0 : item.video) == null ? void 0 : _i.url);
       if (videoUrl) {
-        logger_default.info(`Found HQ video URL from structured field: ${videoUrl}`);
-        return videoUrl;
+        logger_default.info(`\u4ECEget_local_item_list\u7ED3\u6784\u5316\u5B57\u6BB5\u83B7\u53D6\u5230\u9AD8\u6E05\u89C6\u9891URL`);
       }
     }
-    const hqUrlMatch = responseStr.match(/https:\/\/v[0-9]+-dreamnia\.jimeng\.com\/[^"\s\\]+/);
-    if (hqUrlMatch && hqUrlMatch[0]) {
-      logger_default.info(`Regex matched HQ video URL (dreamnia): ${hqUrlMatch[0]}`);
-      return hqUrlMatch[0];
+    if (!videoUrl) {
+      const hqUrlMatch = responseStr.match(/https:\/\/v[0-9]+-dreamnia\.jimeng\.com\/[^"\s\\]+/);
+      if (hqUrlMatch && hqUrlMatch[0]) {
+        videoUrl = hqUrlMatch[0];
+        logger_default.info(`\u6B63\u5219\u63D0\u53D6\u5230\u9AD8\u8D28\u91CF\u89C6\u9891URL (dreamnia)`);
+      }
     }
-    const jimengUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.jimeng\.com\/[^"\s\\]+/);
-    if (jimengUrlMatch && jimengUrlMatch[0]) {
-      logger_default.info(`Regex matched jimeng video URL: ${jimengUrlMatch[0]}`);
-      return jimengUrlMatch[0];
+    if (!videoUrl) {
+      const jimengUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.jimeng\.com\/[^"\s\\]+/);
+      if (jimengUrlMatch && jimengUrlMatch[0]) {
+        videoUrl = jimengUrlMatch[0];
+        logger_default.info(`\u6B63\u5219\u63D0\u53D6\u5230jimeng\u89C6\u9891URL`);
+      }
     }
-    const anyVideoUrlMatch = responseStr.match(/https:\/\/v[0-9]+-[^"\\]*\.(vlabvod|jimeng)\.com\/[^"\s\\]+/);
-    if (anyVideoUrlMatch && anyVideoUrlMatch[0]) {
-      logger_default.info(`Extracted video URL from get_local_item_list: ${anyVideoUrlMatch[0]}`);
-      return anyVideoUrlMatch[0];
+    if (!videoUrl) {
+      const anyVideoUrlMatch = responseStr.match(/https:\/\/[^"\s\\]+\.(?:vlabvod|jimeng|capcut)\.com\/[^"\s\\]+/);
+      if (anyVideoUrlMatch && anyVideoUrlMatch[0]) {
+        videoUrl = anyVideoUrlMatch[0];
+        logger_default.info(`\u4ECEget_local_item_list\u63D0\u53D6\u5230\u89C6\u9891URL`);
+      }
     }
-    logger_default.warn(`Could not extract video URL from get_local_item_list response`);
-    return null;
+    if (!videoUrl) {
+      const capcutUrlMatch = responseStr.match(/https:\/\/[^"\s\\]*capcut\.com\/[^"\s\\]+/);
+      if (capcutUrlMatch && capcutUrlMatch[0]) {
+        videoUrl = capcutUrlMatch[0];
+        logger_default.info(`\u6B63\u5219\u63D0\u53D6\u5230\u56FD\u9645\u7248 CapCut \u89C6\u9891URL`);
+      }
+    }
+    if (!videoUrl) {
+      logger_default.warn(`\u672A\u80FD\u4ECEget_local_item_list\u54CD\u5E94\u4E2D\u63D0\u53D6\u5230\u89C6\u9891URL`);
+      return null;
+    }
+    if (isInternational) {
+      try {
+        await request("post", "/commerce/v3/resource/benefit_metadata", refreshToken, {
+          data: {
+            query_list: [
+              { resource_type: "aigc", resource_id: "get_all", benefit_type_list: [] },
+              { resource_type: "normal_func", resource_id: "get_all", benefit_type_list: [] }
+            ]
+          }
+        });
+        logger_default.info(`\u56FD\u9645\u7248\u6743\u76CAAPI benefit_metadata \u8C03\u7528\u5B8C\u6210`);
+      } catch (e) {
+        logger_default.warn(`\u56FD\u9645\u7248\u6743\u76CAAPI benefit_metadata \u8C03\u7528\u5931\u8D25: ${e.message}`);
+      }
+      try {
+        await request("post", "/commerce/v3/benefits/batch_get_user_benefit", refreshToken, {
+          data: {
+            query_list: [
+              { resource_type: "aigc", resource_id: "get_all", benefit_type_list: [] },
+              { resource_type: "normal_func", resource_id: "get_all", benefit_type_list: [] }
+            ]
+          }
+        });
+        logger_default.info(`\u56FD\u9645\u7248\u6743\u76CAAPI batch_get_user_benefit \u8C03\u7528\u5B8C\u6210`);
+      } catch (e) {
+        logger_default.warn(`\u56FD\u9645\u7248\u6743\u76CAAPI batch_get_user_benefit \u8C03\u7528\u5931\u8D25: ${e.message}`);
+      }
+    }
+    if (videoUrl.includes("display_watermark_busi_aigc")) {
+      logger_default.warn(`\u89C6\u9891URL\u5305\u542B\u514D\u8D39\u8D26\u53F7\u6C34\u5370\u6807\u8BC6 (display_watermark_busi_aigc)\uFF0C\u89C6\u9891\u5C06\u5E26\u6709\u6C34\u5370`);
+    } else if (videoUrl.includes("display_watermark_aigc")) {
+      logger_default.info(`\u89C6\u9891URL\u5305\u542BVIP\u8D26\u53F7\u6807\u8BC6 (display_watermark_aigc)\uFF0CVIP\u7528\u6237\u6B64URL\u4E3A\u65E0\u6C34\u5370\u7248\u672C`);
+    }
+    logger_default.info(`\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
+    return videoUrl;
   } catch (error) {
-    logger_default.warn(`Failed to fetch HQ video download URL: ${error.message}`);
+    logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891\u4E0B\u8F7DURL\u5931\u8D25: ${error.message}`);
     return null;
   }
 }
@@ -4684,7 +4969,7 @@ async function checkVideoJobStatus(historyId, refreshToken) {
     const failCode = historyData.fail_code;
     const item_list = historyData.item_list || [];
     if (status === 30) {
-      const error = failCode === 2038 ? "\u5185\u5BB9\u88AB\u8FC7\u6EE4" : `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`;
+      const error = failCode === 2038 ? "Content filtered" : `Generation failed, error code: ${failCode}`;
       return { status: "failed", error };
     }
     if (status === 20) {
@@ -4701,7 +4986,7 @@ async function checkVideoJobStatus(historyId, refreshToken) {
     }
     const videoUrl = ((_k = (_j = (_i = (_h = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _h.video) == null ? void 0 : _i.transcoded_video) == null ? void 0 : _j.origin) == null ? void 0 : _k.video_url) || ((_m = (_l = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _l.video) == null ? void 0 : _m.play_url) || ((_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.video) == null ? void 0 : _o.download_url) || ((_q = (_p = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _p.video) == null ? void 0 : _q.url);
     if (videoUrl) return { status: "completed", url: videoUrl };
-    return { status: "failed", error: "\u672A\u80FDGetting videoURL" };
+    return { status: "failed", error: "Failed to extract video URL" };
   } catch (err) {
     logger_default.error(`checkVideoJobStatus: API error for historyId=${historyId}: ${err.message}`);
     return { status: "processing" };
@@ -4713,10 +4998,11 @@ async function generateVideo(_model, prompt, {
   duration = 5,
   filePaths = [],
   files = []
-}, refreshToken, jobId) {
+}, refreshToken) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
   const model = getModel2(_model);
   const { width, height } = resolveVideoResolution(resolution, ratio);
-  logger_default.info(`Model: ${_model} -> mapped: ${model} ${width}x${height} (${ratio}@${resolution}) duration: ${duration}s`);
+  logger_default.info(`\u4F7F\u7528\u6A21\u578B: ${_model} \u6620\u5C04\u6A21\u578B: ${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F: ${duration}\u79D2`);
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
@@ -4724,37 +5010,37 @@ async function generateVideo(_model, prompt, {
   let end_frame_image = void 0;
   if (files && files.length > 0) {
     let uploadIDs = [];
-    logger_default.info(`Processing ${files.length} uploaded file(s) for video generation`);
+    logger_default.info(`\u5F00\u59CB\u5904\u7406 ${files.length} \u4E2A\u4E0A\u4F20\u6587\u4EF6\u7528\u4E8E\u89C6\u9891\u751F\u6210`);
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger_default.warn(`File ${i + 1} is invalid, skipping`);
+        logger_default.warn(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u65E0\u6548\uFF0C\u8DF3\u8FC7`);
         continue;
       }
       try {
-        logger_default.info(`Uploading file ${i + 1}: ${file.originalFilename || file.filepath}`);
-        const buffer = fs8.readFileSync(file.filepath);
+        logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6: ${file.originalFilename || file.filepath}`);
+        const buffer = fs7.readFileSync(file.filepath);
         const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger_default.info(`File ${i + 1} uploaded: ${imageUri}`);
+          logger_default.info(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
         } else {
-          logger_default.error(`File ${i + 1} upload failed: no image_uri returned`);
+          logger_default.error(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: \u672A\u83B7\u53D6\u5230 image_uri`);
         }
       } catch (error) {
-        logger_default.error(`File ${i + 1} upload failed: ${error.message}`);
+        logger_default.error(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          logger_default.error(`First-frame file upload failed, stopping to avoid wasting credits`);
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First-frame file upload failed: ${error.message}`);
+          logger_default.error(`\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         } else {
-          logger_default.warn(`File ${i + 1} upload failed, skipping and continuing`);
+          logger_default.warn(`\u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u5C06\u8DF3\u8FC7\u6B64\u6587\u4EF6\u7EE7\u7EED\u5904\u7406`);
         }
       }
     }
-    logger_default.info(`File uploads complete: ${uploadIDs.length} file(s)`);
+    logger_default.info(`\u6587\u4EF6\u4E0A\u4F20\u5B8C\u6210\uFF0C\u6210\u529F\u4E0A\u4F20 ${uploadIDs.length} \u4E2A\u6587\u4EF6`);
     if (uploadIDs.length === 0) {
-      logger_default.error(`All file uploads failed, stopping to avoid wasting credits`);
-      throw new APIException(exceptions_default.API_REQUEST_FAILED, "All file uploads failed, please check that the files are valid");
+      logger_default.error(`\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
+      throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6587\u4EF6\u662F\u5426\u6709\u6548");
     }
     if (uploadIDs[0]) {
       first_frame_image = {
@@ -4769,7 +5055,7 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[0],
         width
       };
-      logger_default.info(`Set first-frame image: ${uploadIDs[0]}`);
+      logger_default.info(`\u8BBE\u7F6E\u9996\u5E27\u56FE\u7247: ${uploadIDs[0]}`);
     }
     if (uploadIDs[1]) {
       end_frame_image = {
@@ -4784,40 +5070,40 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[1],
         width
       };
-      logger_default.info(`Set last-frame image: ${uploadIDs[1]}`);
+      logger_default.info(`\u8BBE\u7F6E\u5C3E\u5E27\u56FE\u7247: ${uploadIDs[1]}`);
     }
   } else if (filePaths && filePaths.length > 0) {
     let uploadIDs = [];
-    logger_default.info(`Uploading  ${filePaths.length} image(s) for video generation`);
+    logger_default.info(`\u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u5F20\u56FE\u7247\u7528\u4E8E\u89C6\u9891\u751F\u6210`);
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) {
-        logger_default.warn(`Image ${i + 1} path is empty, skipping`);
+        logger_default.warn(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u8DEF\u5F84\u4E3A\u7A7A\uFF0C\u8DF3\u8FC7`);
         continue;
       }
       try {
-        logger_default.info(`Uploading image ${i + 1}: ${filePath}`);
+        logger_default.info(`\u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u5F20\u56FE\u7247: ${filePath}`);
         const imageUri = await uploadImageForVideo(filePath, refreshToken);
         if (imageUri) {
           uploadIDs.push(imageUri);
-          logger_default.info(`Image ${i + 1} uploaded: ${imageUri}`);
+          logger_default.info(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
         } else {
-          logger_default.error(`Image ${i + 1} upload failed: no image_uri returned`);
+          logger_default.error(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: \u672A\u83B7\u53D6\u5230 image_uri`);
         }
       } catch (error) {
-        logger_default.error(`Image ${i + 1} upload failed: ${error.message}`);
+        logger_default.error(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          logger_default.error(`First-frame image upload failed, stopping to avoid wasting credits`);
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First-frame image upload failed: ${error.message}`);
+          logger_default.error(`\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         } else {
-          logger_default.warn(`Image ${i + 1} upload failed, skipping and continuing`);
+          logger_default.warn(`\u7B2C ${i + 1} \u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u5C06\u8DF3\u8FC7\u6B64\u56FE\u7247\u7EE7\u7EED\u5904\u7406`);
         }
       }
     }
-    logger_default.info(`Image uploads complete: ${uploadIDs.length} image(s)`);
+    logger_default.info(`\u56FE\u7247\u4E0A\u4F20\u5B8C\u6210\uFF0C\u6210\u529F\u4E0A\u4F20 ${uploadIDs.length} \u5F20\u56FE\u7247`);
     if (uploadIDs.length === 0) {
-      logger_default.error(`All image uploads failed, stopping to avoid wasting credits`);
-      throw new APIException(exceptions_default.API_REQUEST_FAILED, "All image uploads failed, please check that the image URLs are valid");
+      logger_default.error(`\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u505C\u6B62\u89C6\u9891\u751F\u6210\u4EE5\u907F\u514D\u6D6A\u8D39\u79EF\u5206`);
+      throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u56FE\u7247URL\u662F\u5426\u6709\u6548");
     }
     if (uploadIDs[0]) {
       first_frame_image = {
@@ -4832,7 +5118,7 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[0],
         width
       };
-      logger_default.info(`Set first-frame image: ${uploadIDs[0]}`);
+      logger_default.info(`\u8BBE\u7F6E\u9996\u5E27\u56FE\u7247: ${uploadIDs[0]}`);
     }
     if (uploadIDs[1]) {
       end_frame_image = {
@@ -4847,12 +5133,12 @@ async function generateVideo(_model, prompt, {
         uri: uploadIDs[1],
         width
       };
-      logger_default.info(`Set last-frame image: ${uploadIDs[1]}`);
+      logger_default.info(`\u8BBE\u7F6E\u5C3E\u5E27\u56FE\u7247: ${uploadIDs[1]}`);
     } else if (filePaths.length > 1) {
-      logger_default.warn(`Second image upload failed or not provided, using first-frame only`);
+      logger_default.warn(`\u7B2C\u4E8C\u5F20\u56FE\u7247\u4E0A\u4F20\u5931\u8D25\u6216\u672A\u63D0\u4F9B\uFF0C\u5C06\u4EC5\u4F7F\u7528\u9996\u5E27\u56FE\u7247`);
     }
   } else {
-    logger_default.info(`No image files provided, generating video from text only`);
+    logger_default.info(`\u672A\u63D0\u4F9B\u56FE\u7247\u6587\u4EF6\uFF0C\u5C06\u8FDB\u884C\u7EAF\u6587\u672C\u89C6\u9891\u751F\u6210`);
   }
   const componentId = util_default.uuid();
   const metricsExtra = JSON.stringify({
@@ -4954,15 +5240,126 @@ async function generateVideo(_model, prompt, {
   );
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "History ID not found");
-  logger_default.info(`Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
-  await updateJobInDb(jobId, {
-    status: "processing",
-    jimeng_history_id: historyId,
-    refresh_token: refreshToken,
-    model: _model
-  });
-  return null;
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+  let status = 20, failCode, item_list = [];
+  let retryCount = 0;
+  const maxRetries = 120;
+  await new Promise((resolve) => setTimeout(resolve, 5e3));
+  logger_default.info(`\u5F00\u59CB\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0C\u5386\u53F2ID: ${historyId}\uFF0C\u6700\u5927\u91CD\u8BD5\u6B21\u6570: ${maxRetries}`);
+  logger_default.info(`\u5373\u68A6\u5B98\u7F51API\u5730\u5740: https://jimeng.jianying.com/mweb/v1/get_history_by_ids`);
+  logger_default.info(`\u89C6\u9891\u751F\u6210\u8BF7\u6C42\u5DF2\u53D1\u9001\uFF0C\u8BF7\u540C\u65F6\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B: https://jimeng.jianying.com/ai-tool/video/generate`);
+  while (status === 20 && retryCount < maxRetries) {
+    try {
+      const requestUrl = "/mweb/v1/get_history_by_ids";
+      const requestData = {
+        history_ids: [historyId]
+      };
+      let result;
+      let useAlternativeApi = retryCount > 10 && retryCount % 2 === 0;
+      if (useAlternativeApi) {
+        logger_default.info(`\u5C1D\u8BD5\u5907\u7528API\u8BF7\u6C42\u65B9\u5F0F\uFF0CURL: ${requestUrl}, \u5386\u53F2ID: ${historyId}, \u91CD\u8BD5\u6B21\u6570: ${retryCount + 1}/${maxRetries}`);
+        const alternativeRequestData = {
+          history_record_ids: [historyId]
+        };
+        result = await request("post", "/mweb/v1/get_history_records", refreshToken, {
+          data: alternativeRequestData
+        });
+        logger_default.info(`\u5907\u7528API\u54CD\u5E94\u6458\u8981: ${JSON.stringify(result).substring(0, 500)}...`);
+      } else {
+        logger_default.info(`\u53D1\u9001\u8BF7\u6C42\u83B7\u53D6\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0CURL: ${requestUrl}, \u5386\u53F2ID: ${historyId}, \u91CD\u8BD5\u6B21\u6570: ${retryCount + 1}/${maxRetries}`);
+        result = await request("post", requestUrl, refreshToken, {
+          data: requestData
+        });
+        const responseStr = JSON.stringify(result);
+        logger_default.info(`\u6807\u51C6API\u54CD\u5E94\u6458\u8981: ${responseStr.substring(0, 300)}...`);
+      }
+      let historyData;
+      if (useAlternativeApi && result.history_records && result.history_records.length > 0) {
+        historyData = result.history_records[0];
+        logger_default.info(`\u4ECE\u5907\u7528API\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
+      } else if (result.history_list && result.history_list.length > 0) {
+        historyData = result.history_list[0];
+        logger_default.info(`\u4ECE\u6807\u51C6API\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
+      } else if (result[historyId]) {
+        historyData = result[historyId];
+        logger_default.info(`\u4ECEhistoryId\u952E\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55`);
+      } else {
+        logger_default.warn(`\u5386\u53F2\u8BB0\u5F55\u4E0D\u5B58\u5728\uFF0C\u91CD\u8BD5\u4E2D (${retryCount + 1}/${maxRetries})... \u5386\u53F2ID: ${historyId}`);
+        logger_default.info(`\u8BF7\u540C\u65F6\u5728\u5373\u68A6\u5B98\u7F51\u68C0\u67E5\u89C6\u9891\u662F\u5426\u5DF2\u751F\u6210: https://jimeng.jianying.com/ai-tool/video/generate`);
+        retryCount++;
+        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
+        logger_default.info(`\u7B49\u5F85 ${waitTime}ms \u540E\u8FDB\u884C\u7B2C ${retryCount + 1} \u6B21\u91CD\u8BD5`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      logger_default.info(`\u83B7\u53D6\u5230\u5386\u53F2\u8BB0\u5F55\u7ED3\u679C: ${JSON.stringify(historyData)}`);
+      status = historyData.status;
+      failCode = historyData.fail_code;
+      item_list = historyData.item_list || [];
+      logger_default.info(`\u89C6\u9891\u751F\u6210\u72B6\u6001: ${status}, \u5931\u8D25\u4EE3\u7801: ${failCode || "\u65E0"}, \u9879\u76EE\u5217\u8868\u957F\u5EA6: ${item_list.length}`);
+      let tempVideoUrl = (_d = (_c = (_b = (_a = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _a.video) == null ? void 0 : _b.transcoded_video) == null ? void 0 : _c.origin) == null ? void 0 : _d.video_url;
+      if (!tempVideoUrl) {
+        tempVideoUrl = ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.video) == null ? void 0 : _f.play_url) || ((_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.download_url) || ((_j = (_i = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _i.video) == null ? void 0 : _j.url);
+      }
+      if (tempVideoUrl) {
+        logger_default.info(`\u68C0\u6D4B\u5230\u89C6\u9891URL: ${tempVideoUrl}`);
+      }
+      if (status === 30) {
+        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
+        error.historyId = historyId;
+        throw error;
+      }
+      if (status === 20) {
+        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
+        logger_default.info(`\u89C6\u9891\u751F\u6210\u4E2D\uFF0C\u72B6\u6001\u7801: ${status}\uFF0C\u7B49\u5F85 ${waitTime}ms \u540E\u7EE7\u7EED\u67E5\u8BE2`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
+    } catch (error) {
+      logger_default.error(`\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\u51FA\u9519: ${error.message}`);
+      retryCount++;
+      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
+    }
+  }
+  if (retryCount >= maxRetries && status === 20) {
+    logger_default.error(`\u89C6\u9891\u751F\u6210\u8D85\u65F6\uFF0C\u5DF2\u5C1D\u8BD5 ${retryCount} \u6B21\uFF0C\u603B\u8017\u65F6\u7EA6 ${Math.floor(retryCount * 2e3 / 1e3 / 60)} \u5206\u949F`);
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u83B7\u53D6\u89C6\u9891\u751F\u6210\u7ED3\u679C\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B\u60A8\u7684\u89C6\u9891");
+    error.historyId = historyId;
+    throw error;
+  }
+  const itemId = ((_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.item_id) || ((_l = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _l.id) || ((_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.local_item_id) || ((_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.common_attr) == null ? void 0 : _o.id);
+  if (itemId) {
+    try {
+      const hqVideoUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
+      if (hqVideoUrl) {
+        logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF08\u9AD8\u8D28\u91CF\uFF09\uFF0CURL: ${hqVideoUrl}`);
+        return hqVideoUrl;
+      }
+    } catch (error) {
+      logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u4F5C\u4E3A\u56DE\u9000: ${error.message}`);
+    }
+  } else {
+    logger_default.warn(`\u672A\u80FD\u4ECEitem_list\u4E2D\u63D0\u53D6item_id\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u3002item_list[0]\u952E: ${(item_list == null ? void 0 : item_list[0]) ? Object.keys(item_list[0]).join(", ") : "\u65E0"}`);
+  }
+  let videoUrl = (_s = (_r = (_q = (_p = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _p.video) == null ? void 0 : _q.transcoded_video) == null ? void 0 : _r.origin) == null ? void 0 : _s.video_url;
+  if (!videoUrl) {
+    if ((_u = (_t = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _t.video) == null ? void 0 : _u.play_url) {
+      videoUrl = item_list[0].video.play_url;
+      logger_default.info(`\u4ECEplay_url\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
+    } else if ((_w = (_v = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _v.video) == null ? void 0 : _w.download_url) {
+      videoUrl = item_list[0].video.download_url;
+      logger_default.info(`\u4ECEdownload_url\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
+    } else if ((_y = (_x = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _x.video) == null ? void 0 : _y.url) {
+      videoUrl = item_list[0].video.url;
+      logger_default.info(`\u4ECEurl\u83B7\u53D6\u5230\u89C6\u9891URL: ${videoUrl}`);
+    } else {
+      logger_default.error(`\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL\uFF0Citem_list: ${JSON.stringify(item_list)}`);
+      const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL\uFF0C\u8BF7\u7A0D\u540E\u5728\u5373\u68A6\u5B98\u7F51\u67E5\u770B");
+      error.historyId = historyId;
+      throw error;
+    }
+  }
+  logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
+  return videoUrl;
 }
 async function generateSeedanceVideo(_model, prompt, {
   ratio = "4:3",
@@ -4970,33 +5367,34 @@ async function generateSeedanceVideo(_model, prompt, {
   duration = 4,
   filePaths = [],
   files = []
-}, refreshToken, jobId) {
+}, refreshToken) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
   const model = getModel2(_model);
   const benefitType = SEEDANCE_BENEFIT_TYPE_MAP[_model] || "dreamina_video_seedance_20_pro";
   const actualDuration = duration || 4;
   const { width, height } = resolveVideoResolution(resolution, ratio);
-  logger_default.info(`Seedance generation: model=${_model} -> mapped=${model} ${width}x${height} (${ratio}@${resolution}) duration=${actualDuration}s`);
+  logger_default.info(`Seedance 2.0 \u751F\u6210: \u6A21\u578B=${_model} \u6620\u5C04=${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F=${actualDuration}\u79D2`);
   const { totalCredit } = await getCredit(refreshToken);
   if (totalCredit <= 0)
     await receiveCredit(refreshToken);
   let uploadedMaterials = [];
   if (files && files.length > 0) {
-    logger_default.info(`Seedance: Processing ${files.length} uploaded file(s)`);
+    logger_default.info(`Seedance: \u5F00\u59CB\u5904\u7406 ${files.length} \u4E2A\u4E0A\u4F20\u6587\u4EF6`);
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file || !file.filepath) {
-        logger_default.warn(`Seedance: file ${i + 1} file(s) invalid, skipping`);
+        logger_default.warn(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u65E0\u6548\uFF0C\u8DF3\u8FC7`);
         continue;
       }
       const materialType = detectMaterialType(file);
       try {
-        logger_default.info(`Seedance: uploading file ${i + 1} (${materialType}): ${file.originalFilename || file.filepath}`);
-        const buffer = fs8.readFileSync(file.filepath);
+        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${file.originalFilename || file.filepath}`);
+        const buffer = fs7.readFileSync(file.filepath);
         if (materialType === "image") {
           const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger_default.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
+            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
           }
         } else {
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken, file.originalFilename);
@@ -5009,32 +5407,32 @@ async function generateSeedanceVideo(_model, prompt, {
             fps: vodResult.fps,
             name: file.originalFilename || ""
           });
-          logger_default.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
+          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger_default.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
+        logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         }
       }
     }
   } else if (filePaths && filePaths.length > 0) {
-    logger_default.info(`Seedance: Uploading  ${filePaths.length} file(s)`);
+    logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20 ${filePaths.length} \u4E2A\u6587\u4EF6`);
     for (let i = 0; i < filePaths.length; i++) {
       const filePath = filePaths[i];
       if (!filePath) continue;
       const materialType = detectMaterialTypeFromUrl(filePath);
       try {
-        logger_default.info(`Seedance: uploading file ${i + 1} (${materialType}): ${filePath}`);
+        logger_default.info(`Seedance: \u5F00\u59CB\u4E0A\u4F20\u7B2C ${i + 1} \u4E2A\u6587\u4EF6 (${materialType}): ${filePath}`);
         if (materialType === "image") {
           const imageUri = await uploadImageForVideo(filePath, refreshToken);
           if (imageUri) {
             uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
-            logger_default.info(`Seedance: file ${i + 1} image uploaded: ${imageUri}`);
+            logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A\u56FE\u7247\u4E0A\u4F20\u6210\u529F: ${imageUri}`);
           }
         } else {
           const response = await fetch(filePath);
-          if (!response.ok) throw new Error(`File download failed: ${response.status}`);
+          if (!response.ok) throw new Error(`\u4E0B\u8F7D\u6587\u4EF6\u5931\u8D25: ${response.status}`);
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken);
@@ -5046,20 +5444,20 @@ async function generateSeedanceVideo(_model, prompt, {
             duration: vodResult.duration,
             fps: vodResult.fps
           });
-          logger_default.info(`Seedance: file ${i + 1} ${materialType === "video" ? "video" : "audio"} uploaded: ${vodResult.vid}`);
+          logger_default.info(`Seedance: \u7B2C ${i + 1} \u4E2A${materialType === "video" ? "\u89C6\u9891" : "\u97F3\u9891"}\u4E0A\u4F20\u6210\u529F: ${vodResult.vid}`);
         }
       } catch (error) {
-        logger_default.error(`Seedance: file ${i + 1} file upload failed: ${error.message}`);
+        logger_default.error(`Seedance: \u7B2C ${i + 1} \u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         if (i === 0) {
-          throw new APIException(exceptions_default.API_REQUEST_FAILED, `First file upload failed: ${error.message}`);
+          throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
         }
       }
     }
   }
   if (uploadedMaterials.length === 0) {
-    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 requires at least one file (image/video/audio)");
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 \u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u6587\u4EF6\uFF08\u56FE\u7247/\u89C6\u9891/\u97F3\u9891\uFF09");
   }
-  logger_default.info(`Seedance: uploaded ${uploadedMaterials.length} file(s)`);
+  logger_default.info(`Seedance: \u6210\u529F\u4E0A\u4F20 ${uploadedMaterials.length} \u4E2A\u6587\u4EF6`);
   const hasVideoMaterial = uploadedMaterials.some((m) => m.type === "video");
   const finalBenefitType = hasVideoMaterial ? `${benefitType}_with_video` : benefitType;
   const materialList = uploadedMaterials.map((mat) => {
@@ -5149,6 +5547,7 @@ async function generateSeedanceVideo(_model, prompt, {
     webId: String(WEB_ID),
     da_version: draftVersion,
     web_component_open_flag: "1",
+    commerce_with_input_video: "1",
     web_version: "7.5.0",
     aigc_features: "app_lip_sync"
   });
@@ -5156,6 +5555,7 @@ async function generateSeedanceVideo(_model, prompt, {
   const generateBody = {
     extend: {
       root_model: model,
+      workspace_id: 0,
       m_video_commerce_info: {
         benefit_type: finalBenefitType,
         resource_id: "generate_video",
@@ -5234,41 +5634,882 @@ async function generateSeedanceVideo(_model, prompt, {
       aid: DEFAULT_ASSISTANT_ID
     }
   };
-  logger_default.info(`Seedance: sending generate request via browser proxy...`);
-  await acquireBrowserSlot(token.substring(0, 8));
-  let generateResult;
-  try {
-    generateResult = await browser_service_default.fetch(
-      token,
-      generateUrl,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(generateBody)
-      }
-    );
-  } finally {
-    releaseBrowserSlot();
-  }
+  logger_default.info(`Seedance: \u901A\u8FC7\u6D4F\u89C8\u5668\u4EE3\u7406\u53D1\u9001 generate \u8BF7\u6C42...`);
+  const generateResult = await browser_service_default.fetch(
+    token,
+    generateUrl,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(generateBody)
+    }
+  );
   const { ret, errmsg, data: generateData } = generateResult;
   if (ret !== void 0 && Number(ret) !== 0) {
     if (Number(ret) === 5e3) {
-      throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[Video generation failed]: Jimeng credits may be insufficient, ${errmsg}`);
+      throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[\u65E0\u6CD5\u751F\u6210\u89C6\u9891]: \u5373\u68A6\u79EF\u5206\u53EF\u80FD\u4E0D\u8DB3\uFF0C${errmsg}`);
     }
-    throw new APIException(exceptions_default.API_REQUEST_FAILED, `[Jimeng request failed]: ${errmsg}`);
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, `[\u8BF7\u6C42jimeng\u5931\u8D25]: ${errmsg}`);
   }
   const aigc_data = (generateData == null ? void 0 : generateData.aigc_data) || generateResult.aigc_data;
   const historyId = aigc_data.history_record_id;
   if (!historyId)
-    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "History ID not found");
-  logger_default.info(`Seedance Job ${jobId}: historyId=${historyId} obtained, handing off to background poller`);
-  await updateJobInDb(jobId, {
-    status: "processing",
-    jimeng_history_id: historyId,
-    refresh_token: refreshToken,
-    model: _model
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+  let status = 20, failCode, item_list = [];
+  let retryCount = 0;
+  const maxRetries = 120;
+  await new Promise((resolve) => setTimeout(resolve, 5e3));
+  logger_default.info(`Seedance: \u5F00\u59CB\u8F6E\u8BE2\u89C6\u9891\u751F\u6210\u7ED3\u679C\uFF0C\u5386\u53F2ID: ${historyId}`);
+  while (status === 20 && retryCount < maxRetries) {
+    try {
+      const result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
+        data: { history_ids: [historyId] }
+      });
+      const responseStr = JSON.stringify(result);
+      logger_default.info(`Seedance: \u8F6E\u8BE2\u54CD\u5E94\u6458\u8981: ${responseStr.substring(0, 300)}...`);
+      let historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId];
+      if (!historyData) {
+        retryCount++;
+        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      status = historyData.status;
+      failCode = historyData.fail_code;
+      item_list = historyData.item_list || [];
+      logger_default.info(`Seedance: \u72B6\u6001=${status}, \u5931\u8D25\u7801=${failCode || "\u65E0"}`);
+      if (status === 30) {
+        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
+        error.historyId = historyId;
+        throw error;
+      }
+      if (status === 20) {
+        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
+      retryCount++;
+    } catch (error) {
+      if (error instanceof APIException) throw error;
+      logger_default.error(`Seedance: \u8F6E\u8BE2\u51FA\u9519: ${error.message}`);
+      retryCount++;
+      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
+    }
+  }
+  if (retryCount >= maxRetries && status === 20) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u89C6\u9891\u751F\u6210\u8D85\u65F6");
+    error.historyId = historyId;
+    throw error;
+  }
+  const seedanceItemId = ((_b = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _b.item_id) || ((_c = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _c.id) || ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.local_item_id) || ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.common_attr) == null ? void 0 : _f.id);
+  if (seedanceItemId) {
+    try {
+      const hqVideoUrl = await fetchHighQualityVideoUrl(String(seedanceItemId), refreshToken);
+      if (hqVideoUrl) {
+        logger_default.info(`Seedance: \u89C6\u9891\u751F\u6210\u6210\u529F\uFF08\u9AD8\u8D28\u91CF\uFF09\uFF0CURL: ${hqVideoUrl}`);
+        return hqVideoUrl;
+      }
+    } catch (error) {
+      logger_default.warn(`Seedance: \u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u4F5C\u4E3A\u56DE\u9000: ${error.message}`);
+    }
+  } else {
+    logger_default.warn(`Seedance: \u672A\u80FD\u4ECEitem_list\u4E2D\u63D0\u53D6item_id\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u3002item_list[0]\u952E: ${(item_list == null ? void 0 : item_list[0]) ? Object.keys(item_list[0]).join(", ") : "\u65E0"}`);
+  }
+  let videoUrl = ((_j = (_i = (_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.transcoded_video) == null ? void 0 : _i.origin) == null ? void 0 : _j.video_url) || ((_l = (_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.video) == null ? void 0 : _l.play_url) || ((_n = (_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.video) == null ? void 0 : _n.download_url) || ((_p = (_o = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _o.video) == null ? void 0 : _p.url);
+  if (!videoUrl) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL");
+    error.historyId = historyId;
+    throw error;
+  }
+  logger_default.info(`Seedance: \u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
+  return videoUrl;
+}
+function getCanonicalMaterialEntries(materialRegistry) {
+  return [...new Map([...materialRegistry].filter(([key, value]) => key === value.fieldName)).values()].sort((a, b) => a.idx - b.idx);
+}
+async function pollHistoryForVideoUrl(historyId, refreshToken) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w;
+  const regionInfo = parseRegionFromToken(refreshToken);
+  let status = 20, failCode, item_list = [];
+  let retryCount = 0;
+  const maxRetries = 120;
+  await new Promise((resolve) => setTimeout(resolve, 5e3));
+  while (status === 20 && retryCount < maxRetries) {
+    try {
+      const result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
+        data: {
+          history_ids: [historyId],
+          ...regionInfo.isInternational ? { http_common_info: { aid: getAssistantId(regionInfo) } } : {}
+        }
+      });
+      const historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId] || ((_c = (_b = result.data) == null ? void 0 : _b.history_list) == null ? void 0 : _c[0]);
+      if (!historyData) {
+        retryCount++;
+        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      status = historyData.status;
+      failCode = historyData.fail_code;
+      item_list = historyData.item_list || historyData.items || [];
+      if (status === 30 || status === 3) {
+        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
+        error.historyId = historyId;
+        throw error;
+      }
+      if (status === 20 || status === 1) {
+        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
+      retryCount++;
+    } catch (error) {
+      if (error instanceof APIException) throw error;
+      retryCount++;
+      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
+    }
+  }
+  if (retryCount >= maxRetries && (status === 20 || status === 1)) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u89C6\u9891\u751F\u6210\u8D85\u65F6");
+    error.historyId = historyId;
+    throw error;
+  }
+  const itemId = ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.item_id) || ((_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.id) || ((_f = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _f.local_item_id) || ((_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.common_attr) == null ? void 0 : _h.id);
+  if (itemId) {
+    try {
+      const hqVideoUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
+      if (hqVideoUrl) return hqVideoUrl;
+    } catch (error) {
+      logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25\uFF0C\u5C06\u4F7F\u7528\u9884\u89C8URL\u4F5C\u4E3A\u56DE\u9000: ${error.message}`);
+    }
+  }
+  const videoUrl = ((_l = (_k = (_j = (_i = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _i.common_attr) == null ? void 0 : _j.transcoded_video) == null ? void 0 : _k.origin) == null ? void 0 : _l.video_url) || ((_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.result_url) || ((_q = (_p = (_o = (_n = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _n.video) == null ? void 0 : _o.transcoded_video) == null ? void 0 : _p.origin) == null ? void 0 : _q.video_url) || ((_s = (_r = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _r.video) == null ? void 0 : _s.play_url) || ((_u = (_t = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _t.video) == null ? void 0 : _u.download_url) || ((_w = (_v = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _v.video) == null ? void 0 : _w.url);
+  if (!videoUrl) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL");
+    error.historyId = historyId;
+    throw error;
+  }
+  return videoUrl;
+}
+function parseOmniPrompt(prompt, materialRegistry) {
+  const refNames = [...materialRegistry.keys()].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (refNames.length === 0) {
+    return [{ meta_type: "text", text: prompt }];
+  }
+  const buildMaterialRef = (entry) => {
+    var _a;
+    if (entry.type === "image" && entry.imageUri) {
+      return { uri: entry.imageUri };
+    }
+    if (entry.type === "video" && ((_a = entry.videoResult) == null ? void 0 : _a.vid)) {
+      return { vid: entry.videoResult.vid };
+    }
+    return { material_idx: entry.idx };
+  };
+  const pattern = new RegExp(`@(${refNames.join("|")})`, "g");
+  const meta_list = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = pattern.exec(prompt)) !== null) {
+    if (match.index > lastIndex) {
+      const textSegment = prompt.slice(lastIndex, match.index);
+      if (textSegment) {
+        meta_list.push({ meta_type: "text", text: textSegment });
+      }
+    }
+    const refName = match[1];
+    const entry = materialRegistry.get(refName);
+    if (entry) {
+      meta_list.push({
+        meta_type: entry.type,
+        text: "",
+        material_ref: buildMaterialRef(entry)
+      });
+    }
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < prompt.length) {
+    meta_list.push({ meta_type: "text", text: prompt.slice(lastIndex) });
+  }
+  if (meta_list.length === 0) {
+    meta_list.push({ meta_type: "text", text: prompt });
+  }
+  return meta_list;
+}
+function collectInternationalMaterialFields(filesMap, body) {
+  const imageFields = [];
+  const videoFields = [];
+  for (const fieldName of Object.keys(filesMap || {})) {
+    if (fieldName === "image_file" || fieldName.startsWith("image_file_")) imageFields.push(fieldName);
+    if (fieldName === "video_file" || fieldName.startsWith("video_file_")) videoFields.push(fieldName);
+  }
+  for (let i = 1; i <= 9; i++) {
+    const fieldName = `image_file_${i}`;
+    if (typeof (body == null ? void 0 : body[fieldName]) === "string" && body[fieldName].startsWith("http") && !imageFields.includes(fieldName)) imageFields.push(fieldName);
+  }
+  for (let i = 1; i <= 3; i++) {
+    const fieldName = `video_file_${i}`;
+    if (typeof (body == null ? void 0 : body[fieldName]) === "string" && body[fieldName].startsWith("http") && !videoFields.includes(fieldName)) videoFields.push(fieldName);
+  }
+  if (typeof (body == null ? void 0 : body.image_file) === "string" && body.image_file.startsWith("http") && !imageFields.includes("image_file")) imageFields.push("image_file");
+  if (typeof (body == null ? void 0 : body.video_file) === "string" && body.video_file.startsWith("http") && !videoFields.includes("video_file")) videoFields.push("video_file");
+  return { imageFields, videoFields };
+}
+async function uploadInternationalImageUrl(imageUrl, refreshToken, regionInfo) {
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error(`\u4E0B\u8F7D\u56FE\u7247\u5931\u8D25: ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return uploadImageBufferForVideo(buffer, refreshToken, regionInfo);
+}
+async function uploadInternationalVideoUrl(videoUrl, refreshToken, regionInfo) {
+  const response = await fetch(videoUrl);
+  if (!response.ok) throw new Error(`\u4E0B\u8F7D\u89C6\u9891\u5931\u8D25: ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return uploadMediaForVideo(buffer, "video", refreshToken, void 0, regionInfo);
+}
+async function generateInternationalVideoCore(_model, prompt = "", {
+  ratio = "1:1",
+  resolution = "720p",
+  duration = 5,
+  filePaths = [],
+  files = []
+}, refreshToken, onHistoryId) {
+  if (!Object.prototype.hasOwnProperty.call(INTERNATIONAL_VIDEO_MODEL_MAP, _model)) {
+    throw new APIException(exceptions_default.API_REQUEST_PARAMS_INVALID, `\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${_model}`);
+  }
+  const regionInfo = parseRegionFromToken(refreshToken);
+  if (regionInfo.isCN) {
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u56FD\u9645\u89C6\u9891\u63A5\u53E3\u4EC5\u63A5\u53D7\u56FD\u9645 token\uFF08hk-/jp-/sg-/al-/az-/bh-/ca-/cl-/de-/gb-/gy-/il-/iq-/it-/jo-/kg-/om-/pk-/pt-/sa-/se-/tr-/tz-/uz-/ve-/xk-\uFF09");
+  }
+  const model = getInternationalVideoModel(_model);
+  const assistantId = getAssistantId(regionInfo);
+  const { width, height } = resolveVideoResolution(resolution, ratio);
+  const draftVersion = getInternationalVideoDraftVersion(_model);
+  logger_default.info(`\u56FD\u9645\u666E\u901A\u89C6\u9891\u751F\u6210: \u6A21\u578B=${_model} \u6620\u5C04=${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F=${duration}\u79D2`);
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0) await receiveCredit(refreshToken);
+  await request("post", "/mweb/v1/workspace/update", refreshToken, {
+    params: {
+      os: "windows",
+      web_version: "7.5.0",
+      da_version: draftVersion,
+      aigc_features: "app_lip_sync"
+    },
+    data: { workspace_id: 0 },
+    headers: { Referer: "https://dreamina.capcut.com/" }
   });
-  return null;
+  let first_frame_image = void 0;
+  let end_frame_image = void 0;
+  if (files && files.length > 0) {
+    const uploadIDs = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file || !file.filepath) continue;
+      try {
+        const buffer = fs7.readFileSync(file.filepath);
+        const imageUri = await uploadImageBufferForVideo(buffer, refreshToken, regionInfo);
+        if (imageUri) uploadIDs.push(imageUri);
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+    if (uploadIDs.length === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25");
+    if (uploadIDs[0]) {
+      first_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[0], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[0], width };
+    }
+    if (uploadIDs[1]) {
+      end_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[1], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[1], width };
+    }
+  } else if (filePaths && filePaths.length > 0) {
+    const uploadIDs = [];
+    for (let i = 0; i < filePaths.length; i++) {
+      if (!filePaths[i]) continue;
+      try {
+        const imageUri = await uploadImageForVideo(filePaths[i], refreshToken, regionInfo);
+        if (imageUri) uploadIDs.push(imageUri);
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+    if (uploadIDs.length === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25");
+    if (uploadIDs[0]) {
+      first_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[0], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[0], width };
+    }
+    if (uploadIDs[1]) {
+      end_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[1], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[1], width };
+    }
+  }
+  const componentId = util_default.uuid();
+  const submitId = util_default.uuid();
+  const metricsExtra = JSON.stringify({
+    promptSource: "custom",
+    isDefaultSeed: 1,
+    originSubmitId: submitId,
+    isRegenerate: false,
+    enterFrom: "click",
+    position: "page_bottom_box",
+    functionMode: "first_last_frames",
+    sceneOptions: JSON.stringify([{
+      type: "video",
+      scene: "BasicVideoGenerateButton",
+      resolution,
+      modelReqKey: model,
+      videoDuration: duration,
+      reportParams: {
+        enterSource: "generate",
+        vipSource: "generate",
+        extraVipFunctionKey: `${model}-${resolution}`,
+        useVipFunctionDetailsReporterHoc: true
+      },
+      materialTypes: []
+    }])
+  });
+  const aspectRatio = ratio;
+  const internationalVideoReferer = regionInfo.isUS ? "https://dreamina-api.us.capcut.com/ai-tool/generate?type=video" : "https://dreamina.capcut.com/ai-tool/generate?type=video";
+  const { aigc_data } = await request("post", "/mweb/v1/aigc_draft/generate", refreshToken, {
+    params: {
+      aigc_features: "app_lip_sync",
+      commerce_with_input_video: "1",
+      web_version: "7.5.0",
+      da_version: draftVersion
+    },
+    data: {
+      extend: {
+        root_model: end_frame_image ? INTERNATIONAL_VIDEO_MODEL_MAP["jimeng-video-3.0"] : model,
+        m_video_commerce_info: {
+          benefit_type: getVideoBenefitType(model),
+          resource_id: "generate_video",
+          resource_id_type: "str",
+          resource_sub_type: "aigc"
+        },
+        workspace_id: 0,
+        m_video_commerce_info_list: [{
+          benefit_type: getVideoBenefitType(model),
+          resource_id: "generate_video",
+          resource_id_type: "str",
+          resource_sub_type: "aigc"
+        }]
+      },
+      submit_id: submitId,
+      metrics_extra: metricsExtra,
+      draft_content: JSON.stringify({
+        type: "draft",
+        id: util_default.uuid(),
+        min_version: "3.0.5",
+        min_features: [],
+        is_from_tsn: true,
+        version: draftVersion,
+        main_component_id: componentId,
+        component_list: [{
+          type: "video_base_component",
+          id: componentId,
+          min_version: "1.0.0",
+          aigc_mode: "workbench",
+          metadata: {
+            type: "",
+            id: util_default.uuid(),
+            created_platform: 3,
+            created_platform_version: "",
+            created_time_in_ms: Date.now().toString(),
+            created_did: ""
+          },
+          generate_type: "gen_video",
+          abilities: {
+            type: "",
+            id: util_default.uuid(),
+            gen_video: {
+              id: util_default.uuid(),
+              type: "",
+              text_to_video_params: {
+                type: "",
+                id: util_default.uuid(),
+                model_req_key: model,
+                priority: 0,
+                seed: Math.floor(Math.random() * 4294967296),
+                video_aspect_ratio: aspectRatio,
+                video_gen_inputs: [{
+                  duration_ms: duration * 1e3,
+                  first_frame_image,
+                  end_frame_image,
+                  fps: 24,
+                  id: util_default.uuid(),
+                  min_version: "3.0.5",
+                  prompt,
+                  resolution,
+                  type: "",
+                  video_mode: 2,
+                  idip_meta_list: []
+                }]
+              },
+              video_task_extra: metricsExtra
+            }
+          },
+          process_type: 1
+        }]
+      }),
+      http_common_info: { aid: assistantId }
+    },
+    headers: { Referer: "https://dreamina.capcut.com/" }
+  });
+  const historyId = aigc_data == null ? void 0 : aigc_data.history_record_id;
+  if (!historyId) throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+  if (onHistoryId) onHistoryId(historyId);
+  const videoUrl = await pollHistoryForVideoUrl(historyId, refreshToken);
+  return { url: videoUrl, historyId };
+}
+async function generateInternationalVideo(_model, prompt = "", options, refreshToken) {
+  const { url } = await generateInternationalVideoCore(_model, prompt, options, refreshToken);
+  return url;
+}
+async function generateInternationalSeedanceVideo(_model, prompt = "", {
+  ratio = "4:3",
+  resolution = "720p",
+  duration = 4,
+  filePaths = [],
+  filesMap = {},
+  body = {}
+}, refreshToken) {
+  var _a, _b, _c;
+  if (!isInternationalSeedanceModel(_model)) {
+    throw new APIException(exceptions_default.API_REQUEST_PARAMS_INVALID, `\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${_model}`);
+  }
+  const regionInfo = parseRegionFromToken(refreshToken);
+  if (regionInfo.isCN) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u56FD\u9645 Seedance \u63A5\u53E3\u4EC5\u63A5\u53D7\u56FD\u9645 token\uFF08hk-/jp-/sg-/al-/az-/bh-/ca-/cl-/de-/gb-/gy-/iq-/it-/jo-/kg-/om-/pk-/sa-/se-/tr-/tz-/ve-\uFF09");
+  if (regionInfo.isUS) throw new APIException(exceptions_default.API_REQUEST_FAILED, "US token \u6682\u4E0D\u652F\u6301\u56FD\u9645 Seedance 2.0 / 2.0-fast");
+  const actualDuration = Math.max(4, Math.min(15, duration));
+  const { width, height } = resolveVideoResolution(resolution, ratio);
+  const model = INTERNATIONAL_SEEDANCE_MODEL_MAP[_model];
+  const assistantId = getAssistantId(regionInfo);
+  const seed = Math.floor(Math.random() * 4294967296);
+  const isFastModel = _model === "seedance-2.0-fast" || _model === "jimeng-video-seedance-2.0-fast";
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0 && !isFastModel) {
+    throw new APIException(
+      exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS,
+      "\u56FD\u9645 Seedance \u8D26\u6237\u79EF\u5206\u4E0D\u8DB3"
+    );
+  }
+  if (totalCredit <= 0 && isFastModel) {
+    logger_default.info("\u56FD\u9645 Seedance-fast \u5F53\u524D\u79EF\u5206\u4E3A 0\uFF0C\u4ECD\u7EE7\u7EED\u5C1D\u8BD5\u751F\u6210");
+  }
+  await request("post", "/mweb/v1/update_settings", refreshToken, {
+    data: {
+      custom_settings: {
+        aigc_compliance_confirmed: true
+      }
+    }
+  });
+  const materialRegistry = /* @__PURE__ */ new Map();
+  const promptHasExplicitRefs = /@(?:[A-Za-z_][A-Za-z0-9_]*|(?:图|image)?\d+)/.test(prompt || "");
+  let materialIdx = 0;
+  const canonicalKeys = /* @__PURE__ */ new Set(["image_file", "video_file"]);
+  for (let i = 1; i <= 9; i++) canonicalKeys.add(`image_file_${i}`);
+  for (let i = 1; i <= 3; i++) canonicalKeys.add(`video_file_${i}`);
+  const registerAlias = (name, entry) => {
+    if (name && !canonicalKeys.has(name) && !materialRegistry.has(name)) materialRegistry.set(name, entry);
+  };
+  const { imageFields, videoFields } = collectInternationalMaterialFields(filesMap, body);
+  if (imageFields.length + videoFields.length + filePaths.length === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u56FD\u9645 Seedance \u63A5\u53E3\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u7D20\u6750");
+  if (imageFields.length + filePaths.length > 9) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u56FE\u7247\u7D20\u6750\u6700\u591A 9 \u4E2A");
+  if (videoFields.length > 3) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u89C6\u9891\u7D20\u6750\u6700\u591A 3 \u4E2A");
+  if (imageFields.length + videoFields.length + filePaths.length > 12) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u7D20\u6750\u603B\u6570\u6700\u591A 12 \u4E2A");
+  for (const fieldName of imageFields) {
+    const imageFile = (_a = filesMap == null ? void 0 : filesMap[fieldName]) == null ? void 0 : _a[0];
+    const imageUrl = body == null ? void 0 : body[fieldName];
+    const imageUri = imageFile ? await uploadImageBufferForVideo(fs7.readFileSync(imageFile.filepath), refreshToken, regionInfo) : await uploadInternationalImageUrl(imageUrl, refreshToken, regionInfo);
+    const entry = { idx: materialIdx++, type: "image", fieldName, imageUri, imageWidth: width, imageHeight: height };
+    materialRegistry.set(fieldName, entry);
+    if (imageFile == null ? void 0 : imageFile.originalFilename) registerAlias(imageFile.originalFilename, entry);
+  }
+  let slotIndex = 1;
+  for (const url of filePaths) {
+    while (slotIndex <= 9 && materialRegistry.has(`image_file_${slotIndex}`)) slotIndex++;
+    if (slotIndex > 9) break;
+    const fieldName = `image_file_${slotIndex}`;
+    const imageUri = await uploadInternationalImageUrl(url, refreshToken, regionInfo);
+    materialRegistry.set(fieldName, { idx: materialIdx++, type: "image", fieldName, imageUri, imageWidth: width, imageHeight: height });
+    slotIndex++;
+  }
+  for (const fieldName of videoFields) {
+    const videoFile = (_b = filesMap == null ? void 0 : filesMap[fieldName]) == null ? void 0 : _b[0];
+    const videoUrl = body == null ? void 0 : body[fieldName];
+    const vodResult = videoFile ? await uploadMediaForVideo(fs7.readFileSync(videoFile.filepath), "video", refreshToken, videoFile.originalFilename, regionInfo) : await uploadInternationalVideoUrl(videoUrl, refreshToken, regionInfo);
+    const entry = { idx: materialIdx++, type: "video", fieldName, videoResult: { vid: vodResult.vid, width: vodResult.width || 0, height: vodResult.height || 0, duration: vodResult.duration || 0, fps: vodResult.fps || 0 } };
+    materialRegistry.set(fieldName, entry);
+    if (videoFile == null ? void 0 : videoFile.originalFilename) registerAlias(videoFile.originalFilename, entry);
+  }
+  const orderedEntries = getCanonicalMaterialEntries(materialRegistry);
+  const materialList = orderedEntries.map((entry) => {
+    const base = { type: "", id: util_default.uuid() };
+    if (entry.type === "image") {
+      return {
+        ...base,
+        material_type: "image",
+        image_info: {
+          type: "image",
+          id: util_default.uuid(),
+          source_from: "upload",
+          platform_type: 1,
+          name: "",
+          image_uri: entry.imageUri,
+          aigc_image: { type: "", id: util_default.uuid() },
+          width: entry.imageWidth || 0,
+          height: entry.imageHeight || 0,
+          format: "",
+          uri: entry.imageUri
+        }
+      };
+    }
+    return {
+      ...base,
+      material_type: "video",
+      video_info: {
+        type: "video",
+        id: util_default.uuid(),
+        source_from: "upload",
+        name: "",
+        vid: entry.videoResult.vid,
+        fps: entry.videoResult.fps,
+        width: entry.videoResult.width,
+        height: entry.videoResult.height,
+        duration: entry.videoResult.duration
+      }
+    };
+  });
+  const materialTypes = [];
+  for (const entry of orderedEntries) {
+    if (entry.type === "image") {
+      materialTypes.push(1);
+    } else {
+      materialTypes.push(2);
+    }
+  }
+  const meta_list = parseOmniPrompt(prompt || "", materialRegistry);
+  if (!promptHasExplicitRefs && meta_list.every((item) => item.meta_type === "text")) {
+    for (const entry of orderedEntries) {
+      meta_list.unshift({
+        meta_type: entry.type,
+        text: "",
+        material_ref: entry.type === "image" ? { uri: entry.imageUri } : { vid: (_c = entry.videoResult) == null ? void 0 : _c.vid }
+      });
+    }
+  }
+  const componentId = util_default.uuid();
+  const submitId = util_default.uuid();
+  const metricsExtra = JSON.stringify({ position: "page_bottom_box", isDefaultSeed: 1, originSubmitId: submitId, isRegenerate: false, enterFrom: "click", functionMode: "omni_reference", sceneOptions: JSON.stringify([{ type: "video", scene: "BasicVideoGenerateButton", modelReqKey: model, videoDuration: actualDuration, materialTypes }]) });
+  const draftContent = JSON.stringify({
+    type: "draft",
+    id: util_default.uuid(),
+    min_version: "3.3.9",
+    min_features: ["AIGC_Video_UnifiedEdit"],
+    is_from_tsn: true,
+    version: "3.3.12",
+    main_component_id: componentId,
+    component_list: [{
+      type: "video_base_component",
+      id: componentId,
+      min_version: "1.0.0",
+      aigc_mode: "workbench",
+      metadata: {
+        type: "",
+        id: util_default.uuid(),
+        created_platform: 3,
+        created_platform_version: "",
+        created_time_in_ms: String(Date.now()),
+        created_did: ""
+      },
+      generate_type: "gen_video",
+      abilities: {
+        type: "",
+        id: util_default.uuid(),
+        gen_video: {
+          type: "",
+          id: util_default.uuid(),
+          text_to_video_params: {
+            type: "",
+            id: util_default.uuid(),
+            video_gen_inputs: [{
+              type: "",
+              id: util_default.uuid(),
+              min_version: "3.3.9",
+              prompt: "",
+              video_mode: 2,
+              fps: 24,
+              duration_ms: actualDuration * 1e3,
+              idip_meta_list: [],
+              unified_edit_input: {
+                type: "",
+                id: util_default.uuid(),
+                material_list: materialList,
+                meta_list
+              }
+            }],
+            video_aspect_ratio: ratio,
+            seed,
+            model_req_key: model,
+            priority: 0
+          },
+          video_task_extra: metricsExtra
+        }
+      },
+      process_type: 1
+    }]
+  });
+  const baseUrl = "https://mweb-api-sg.capcut.com";
+  const generateQueryParams = new URLSearchParams({
+    aid: String(assistantId),
+    device_platform: "web",
+    region: regionInfo.regionCode,
+    os: "windows",
+    commerce_with_input_video: "1",
+    web_component_open_flag: "1",
+    web_version: "7.5.0",
+    aigc_features: "app_lip_sync",
+    da_version: "3.3.12"
+  });
+  const generateUrl = `${baseUrl}/mweb/v1/aigc_draft/generate?${generateQueryParams.toString()}`;
+  const generateBody = {
+    submit_id: submitId,
+    extend: {
+      root_model: model,
+      workspace_id: 0,
+      m_video_commerce_info: {
+        benefit_type: INTERNATIONAL_SEEDANCE_BENEFIT_TYPE_MAP[_model],
+        resource_id: "generate_video",
+        resource_id_type: "str",
+        resource_sub_type: "aigc"
+      },
+      m_video_commerce_info_list: [{
+        benefit_type: INTERNATIONAL_SEEDANCE_BENEFIT_TYPE_MAP[_model],
+        resource_id: "generate_video",
+        resource_id_type: "str",
+        resource_sub_type: "aigc"
+      }]
+    },
+    metrics_extra: metricsExtra,
+    draft_content: draftContent,
+    http_common_info: { aid: assistantId }
+  };
+  const token = await acquireToken(refreshToken);
+  logger_default.info(`\u56FD\u9645 Seedance generate payload: ${JSON.stringify(generateBody)}`);
+  logger_default.info(`\u56FD\u9645 Seedance: \u53D1\u9001 generate \u8BF7\u6C42\uFF08\u4F7F\u7528 X-Bogus/X-Gnarly \u7B7E\u540D\uFF09...`);
+  const { aigc_data: generateData } = await request(
+    "post",
+    "/mweb/v1/aigc_draft/generate",
+    refreshToken,
+    {
+      data: generateBody
+    }
+  );
+  const historyId = generateData == null ? void 0 : generateData.history_record_id;
+  if (!historyId) {
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u8BB0\u5F55ID\u4E0D\u5B58\u5728: ${JSON.stringify(generateData)}`);
+  }
+  logger_default.info(`\u56FD\u9645 Seedance: \u89C6\u9891\u751F\u6210\u4EFB\u52A1\u5DF2\u63D0\u4EA4\uFF0Chistory_id: ${historyId}`);
+  return pollHistoryForVideoUrl(historyId, refreshToken);
+}
+async function _generateInternationalSeedanceVideoWithHistoryId(_model, prompt, {
+  ratio = "4:3",
+  resolution = "720p",
+  duration = 4,
+  filePaths = [],
+  filesMap = {},
+  body = {}
+}, refreshToken, onHistoryId) {
+  var _a, _b, _c;
+  const regionInfo = parseRegionFromToken(refreshToken);
+  if (regionInfo.isCN) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u56FD\u9645 Seedance \u63A5\u53E3\u4EC5\u63A5\u53D7\u56FD\u9645 token");
+  if (regionInfo.isUS) throw new APIException(exceptions_default.API_REQUEST_FAILED, "US token \u6682\u4E0D\u652F\u6301\u56FD\u9645 Seedance 2.0 / 2.0-fast");
+  const actualDuration = Math.max(4, Math.min(15, duration));
+  const { width, height } = resolveVideoResolution(resolution, ratio);
+  const model = INTERNATIONAL_SEEDANCE_MODEL_MAP[_model];
+  const assistantId = getAssistantId(regionInfo);
+  const seed = Math.floor(Math.random() * 4294967296);
+  const isFastModel = _model === "seedance-2.0-fast" || _model === "jimeng-video-seedance-2.0-fast";
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0 && !isFastModel) {
+    throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, "\u56FD\u9645 Seedance \u8D26\u6237\u79EF\u5206\u4E0D\u8DB3");
+  }
+  await request("post", "/mweb/v1/update_settings", refreshToken, {
+    data: { custom_settings: { aigc_compliance_confirmed: true } }
+  });
+  const materialRegistry = /* @__PURE__ */ new Map();
+  const promptHasExplicitRefs = /@(?:[A-Za-z_][A-Za-z0-9_]*|(?:图|image)?\d+)/.test(prompt || "");
+  let materialIdx = 0;
+  const canonicalKeys = /* @__PURE__ */ new Set(["image_file", "video_file"]);
+  for (let i = 1; i <= 9; i++) canonicalKeys.add(`image_file_${i}`);
+  for (let i = 1; i <= 3; i++) canonicalKeys.add(`video_file_${i}`);
+  const registerAlias = (name, entry) => {
+    if (name && !canonicalKeys.has(name) && !materialRegistry.has(name)) materialRegistry.set(name, entry);
+  };
+  const { imageFields, videoFields } = collectInternationalMaterialFields(filesMap, body);
+  for (const fieldName of imageFields) {
+    const imageFile = (_a = filesMap == null ? void 0 : filesMap[fieldName]) == null ? void 0 : _a[0];
+    const imageUrl = body == null ? void 0 : body[fieldName];
+    const imageUri = imageFile ? await uploadImageBufferForVideo(fs7.readFileSync(imageFile.filepath), refreshToken, regionInfo) : await uploadInternationalImageUrl(imageUrl, refreshToken, regionInfo);
+    const entry = { idx: materialIdx++, type: "image", fieldName, imageUri, imageWidth: width, imageHeight: height };
+    materialRegistry.set(fieldName, entry);
+    if (imageFile == null ? void 0 : imageFile.originalFilename) registerAlias(imageFile.originalFilename, entry);
+  }
+  let slotIndex = 1;
+  for (const url of filePaths) {
+    while (slotIndex <= 9 && materialRegistry.has(`image_file_${slotIndex}`)) slotIndex++;
+    if (slotIndex > 9) break;
+    const fieldName = `image_file_${slotIndex}`;
+    const imageUri = await uploadInternationalImageUrl(url, refreshToken, regionInfo);
+    materialRegistry.set(fieldName, { idx: materialIdx++, type: "image", fieldName, imageUri, imageWidth: width, imageHeight: height });
+    slotIndex++;
+  }
+  for (const fieldName of videoFields) {
+    const videoFile = (_b = filesMap == null ? void 0 : filesMap[fieldName]) == null ? void 0 : _b[0];
+    const videoUrl2 = body == null ? void 0 : body[fieldName];
+    const vodResult = videoFile ? await uploadMediaForVideo(fs7.readFileSync(videoFile.filepath), "video", refreshToken, videoFile.originalFilename, regionInfo) : await uploadInternationalVideoUrl(videoUrl2, refreshToken, regionInfo);
+    const entry = { idx: materialIdx++, type: "video", fieldName, videoResult: { vid: vodResult.vid, width: vodResult.width || 0, height: vodResult.height || 0, duration: vodResult.duration || 0, fps: vodResult.fps || 0 } };
+    materialRegistry.set(fieldName, entry);
+    if (videoFile == null ? void 0 : videoFile.originalFilename) registerAlias(videoFile.originalFilename, entry);
+  }
+  const orderedEntries = getCanonicalMaterialEntries(materialRegistry);
+  const materialList = orderedEntries.map((entry) => {
+    const base = { type: "", id: util_default.uuid() };
+    if (entry.type === "image") {
+      return { ...base, material_type: "image", image_info: { type: "image", id: util_default.uuid(), source_from: "upload", platform_type: 1, name: "", image_uri: entry.imageUri, aigc_image: { type: "", id: util_default.uuid() }, width: entry.imageWidth || 0, height: entry.imageHeight || 0, format: "", uri: entry.imageUri } };
+    }
+    return { ...base, material_type: "video", video_info: { type: "video", id: util_default.uuid(), source_from: "upload", name: "", vid: entry.videoResult.vid, fps: entry.videoResult.fps, width: entry.videoResult.width, height: entry.videoResult.height, duration: entry.videoResult.duration } };
+  });
+  const materialTypes = orderedEntries.map((e) => e.type === "image" ? 1 : 2);
+  const meta_list = parseOmniPrompt(prompt || "", materialRegistry);
+  if (!promptHasExplicitRefs && meta_list.every((item) => item.meta_type === "text")) {
+    for (const entry of orderedEntries) {
+      meta_list.unshift({
+        meta_type: entry.type,
+        text: "",
+        material_ref: entry.type === "image" ? { uri: entry.imageUri } : { vid: (_c = entry.videoResult) == null ? void 0 : _c.vid }
+      });
+    }
+  }
+  const componentId = util_default.uuid();
+  const submitId = util_default.uuid();
+  const metricsExtra = JSON.stringify({ position: "page_bottom_box", isDefaultSeed: 1, originSubmitId: submitId, isRegenerate: false, enterFrom: "click", functionMode: "omni_reference", sceneOptions: JSON.stringify([{ type: "video", scene: "BasicVideoGenerateButton", modelReqKey: model, videoDuration: actualDuration, materialTypes }]) });
+  const draftContent = JSON.stringify({
+    type: "draft",
+    id: util_default.uuid(),
+    min_version: "3.3.9",
+    min_features: ["AIGC_Video_UnifiedEdit"],
+    is_from_tsn: true,
+    version: "3.3.12",
+    main_component_id: componentId,
+    component_list: [{ type: "video_base_component", id: componentId, min_version: "1.0.0", aigc_mode: "workbench", metadata: { type: "", id: util_default.uuid(), created_platform: 3, created_platform_version: "", created_time_in_ms: String(Date.now()), created_did: "" }, generate_type: "gen_video", abilities: { type: "", id: util_default.uuid(), gen_video: { type: "", id: util_default.uuid(), text_to_video_params: { type: "", id: util_default.uuid(), video_gen_inputs: [{ type: "", id: util_default.uuid(), min_version: "3.3.9", prompt: "", video_mode: 2, fps: 24, duration_ms: actualDuration * 1e3, idip_meta_list: [], unified_edit_input: { type: "", id: util_default.uuid(), material_list: materialList, meta_list } }], video_aspect_ratio: ratio, seed, model_req_key: model, priority: 0 }, video_task_extra: metricsExtra } }, process_type: 1 }]
+  });
+  const generateBody = {
+    submit_id: submitId,
+    extend: { root_model: model, workspace_id: 0, m_video_commerce_info: { benefit_type: INTERNATIONAL_SEEDANCE_BENEFIT_TYPE_MAP[_model], resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" }, m_video_commerce_info_list: [{ benefit_type: INTERNATIONAL_SEEDANCE_BENEFIT_TYPE_MAP[_model], resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" }] },
+    metrics_extra: metricsExtra,
+    draft_content: draftContent,
+    http_common_info: { aid: assistantId }
+  };
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-\u56FD\u9645Seedance: \u53D1\u9001 generate \u8BF7\u6C42...`);
+  const { aigc_data: generateData } = await request("post", "/mweb/v1/aigc_draft/generate", refreshToken, {
+    params: {
+      commerce_with_input_video: "1"
+    },
+    data: generateBody
+  });
+  const historyId = generateData == null ? void 0 : generateData.history_record_id;
+  if (!historyId) throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u8BB0\u5F55ID\u4E0D\u5B58\u5728: ${JSON.stringify(generateData)}`);
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-\u56FD\u9645Seedance: \u751F\u6210\u8BF7\u6C42\u5DF2\u63D0\u4EA4, historyId=${historyId}`);
+  if (onHistoryId) onHistoryId(historyId);
+  const videoUrl = await pollHistoryForVideoUrl(historyId, refreshToken);
+  return { url: videoUrl, historyId };
+}
+function submitInternationalAsyncVideoTask(model, prompt, options, refreshToken) {
+  if (activeAsyncCount >= MAX_ASYNC_CONCURRENCY) {
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u5F53\u524D\u5F02\u6B65\u4EFB\u52A1\u5E76\u53D1\u6570\u5DF2\u8FBE\u4E0A\u9650 (${MAX_ASYNC_CONCURRENCY})\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`);
+  }
+  if (!fs7.existsSync(ASYNC_TASK_DIR)) {
+    fs7.mkdirSync(ASYNC_TASK_DIR, { recursive: true });
+  }
+  const taskId = util_default.uuid();
+  const task = {
+    taskId,
+    status: "processing",
+    model,
+    prompt,
+    refreshToken,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  task._promise = new Promise((resolve) => {
+    task._resolve = resolve;
+  });
+  asyncTaskStore.set(taskId, task);
+  saveTaskToFile(task);
+  activeAsyncCount++;
+  logger_default.info(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1\u5DF2\u521B\u5EFA: ${taskId}, \u6A21\u578B: ${model}, \u5F53\u524D\u5E76\u53D1: ${activeAsyncCount}/${MAX_ASYNC_CONCURRENCY}`);
+  (async () => {
+    try {
+      let url;
+      if (isInternationalSeedanceModel(model)) {
+        const result = await _generateInternationalSeedanceVideoWithHistoryId(
+          model,
+          prompt,
+          {
+            ratio: options.ratio,
+            resolution: options.resolution,
+            duration: options.duration,
+            filePaths: options.filePaths,
+            filesMap: options.filesMap,
+            body: options.body
+          },
+          refreshToken,
+          (historyId) => {
+            task.historyId = historyId;
+            saveTaskToFile(task);
+            logger_default.info(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1: historyId \u5DF2\u4FDD\u5B58, ${taskId} -> ${historyId}`);
+          }
+        );
+        url = result.url;
+      } else {
+        const result = await generateInternationalVideoCore(
+          model,
+          prompt,
+          {
+            ratio: options.ratio,
+            resolution: options.resolution,
+            duration: options.duration,
+            filePaths: options.filePaths,
+            files: options.files
+          },
+          refreshToken,
+          (historyId) => {
+            task.historyId = historyId;
+            saveTaskToFile(task);
+            logger_default.info(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1-\u666E\u901A\u89C6\u9891: historyId \u5DF2\u4FDD\u5B58, ${taskId} -> ${historyId}`);
+          }
+        );
+        url = result.url;
+      }
+      task.status = "succeeded";
+      task.result = { url, revised_prompt: prompt };
+      task.updatedAt = Date.now();
+      saveTaskToFile(task);
+      logger_default.info(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1\u6210\u529F: ${taskId}, \u89C6\u9891URL: ${url}`);
+    } catch (error) {
+      const errorMsg = (error == null ? void 0 : error.message) || "";
+      if (errorMsg.includes("\u8D85\u65F6")) {
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.warn(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1\u540E\u53F0\u8F6E\u8BE2\u8D85\u65F6\uFF0C\u4FDD\u6301 processing \u72B6\u6001: ${taskId}, historyId=${task.historyId}`);
+      } else {
+        task.status = "failed";
+        task.error = error instanceof APIException ? `[${error.code}] ${error.message}` : errorMsg || "\u672A\u77E5\u9519\u8BEF";
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.error(`\u56FD\u9645\u5F02\u6B65\u4EFB\u52A1\u5931\u8D25: ${taskId}, \u9519\u8BEF: ${task.error}`);
+      }
+    } finally {
+      activeAsyncCount--;
+      if (task._resolve) task._resolve();
+    }
+  })();
+  return taskId;
 }
 function buildMetaListFromPrompt(prompt, materials) {
   const metaList = [];
@@ -5316,10 +6557,729 @@ function buildMetaListFromPrompt(prompt, materials) {
     if (prompt && prompt.trim()) {
       metaList.push({ meta_type: "text", text: `\u7D20\u6750\uFF0C${prompt}` });
     } else {
-      metaList.push({ meta_type: "text", text: "\u7D20\u6750\u751F\u6210video" });
+      metaList.push({ meta_type: "text", text: "\u7D20\u6750\u751F\u6210\u89C6\u9891" });
     }
   }
   return metaList;
+}
+async function pollVideoResult(historyId, refreshToken, maxRetries = 120) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+  let status = 20, failCode, item_list = [];
+  let retryCount = 0;
+  logger_default.info(`\u8F6E\u8BE2\u89C6\u9891\u7ED3\u679C: historyId=${historyId}, maxRetries=${maxRetries}`);
+  while (status === 20 && retryCount < maxRetries) {
+    try {
+      const result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
+        data: { history_ids: [historyId] }
+      });
+      const responseStr = JSON.stringify(result);
+      logger_default.info(`\u8F6E\u8BE2\u54CD\u5E94\u6458\u8981: ${responseStr.substring(0, 300)}...`);
+      let historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId];
+      if (!historyData) {
+        retryCount++;
+        const waitTime = Math.min(2e3 * (retryCount + 1), 3e4);
+        logger_default.info(`\u5386\u53F2\u8BB0\u5F55\u672A\u627E\u5230\uFF0C\u7B49\u5F85 ${waitTime}ms \u540E\u91CD\u8BD5 (${retryCount}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      status = historyData.status;
+      failCode = historyData.fail_code;
+      item_list = historyData.item_list || [];
+      logger_default.info(`\u8F6E\u8BE2\u72B6\u6001: status=${status}, failCode=${failCode || "\u65E0"}, items=${item_list.length}`);
+      if (status === 30) {
+        const error = failCode === 2038 ? new APIException(exceptions_default.API_CONTENT_FILTERED, "\u5185\u5BB9\u88AB\u8FC7\u6EE4") : new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, `\u751F\u6210\u5931\u8D25\uFF0C\u9519\u8BEF\u7801: ${failCode}`);
+        error.historyId = historyId;
+        throw error;
+      }
+      if (status === 20) {
+        const waitTime = 2e3 * Math.min(retryCount + 1, 5);
+        logger_default.info(`\u89C6\u9891\u751F\u6210\u4E2D\uFF0C\u7B49\u5F85 ${waitTime}ms \u540E\u7EE7\u7EED\u67E5\u8BE2 (${retryCount + 1}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
+      retryCount++;
+    } catch (error) {
+      if (error instanceof APIException) throw error;
+      logger_default.error(`\u8F6E\u8BE2\u51FA\u9519: ${error.message}`);
+      retryCount++;
+      await new Promise((resolve) => setTimeout(resolve, 2e3 * (retryCount + 1)));
+    }
+  }
+  if (retryCount >= maxRetries && status === 20) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u89C6\u9891\u751F\u6210\u8D85\u65F6");
+    error.historyId = historyId;
+    throw error;
+  }
+  const itemId = ((_b = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _b.item_id) || ((_c = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _c.id) || ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.local_item_id) || ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.common_attr) == null ? void 0 : _f.id);
+  if (itemId) {
+    try {
+      const hqVideoUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
+      if (hqVideoUrl) {
+        logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF08\u9AD8\u8D28\u91CF\uFF09\uFF0CURL: ${hqVideoUrl}`);
+        return hqVideoUrl;
+      }
+    } catch (error) {
+      logger_default.warn(`\u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25: ${error.message}`);
+    }
+  }
+  let videoUrl = ((_j = (_i = (_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.transcoded_video) == null ? void 0 : _i.origin) == null ? void 0 : _j.video_url) || ((_l = (_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.video) == null ? void 0 : _l.play_url) || ((_n = (_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.video) == null ? void 0 : _n.download_url) || ((_p = (_o = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _o.video) == null ? void 0 : _p.url);
+  if (!videoUrl) {
+    const error = new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u672A\u80FD\u83B7\u53D6\u89C6\u9891URL");
+    error.historyId = historyId;
+    throw error;
+  }
+  logger_default.info(`\u89C6\u9891\u751F\u6210\u6210\u529F\uFF0CURL: ${videoUrl}`);
+  return videoUrl;
+}
+async function checkVideoStatusByHistoryId(historyId, refreshToken) {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+  try {
+    const result = await request("post", "/mweb/v1/get_history_by_ids", refreshToken, {
+      data: { history_ids: [historyId] }
+    });
+    let historyData = ((_a = result.history_list) == null ? void 0 : _a[0]) || result[historyId];
+    if (!historyData) {
+      logger_default.info(`\u5373\u65F6\u67E5\u8BE2: \u672A\u627E\u5230\u5386\u53F2\u8BB0\u5F55 historyId=${historyId}`);
+      return null;
+    }
+    const status = historyData.status;
+    const failCode = historyData.fail_code;
+    const item_list = historyData.item_list || [];
+    logger_default.info(`\u5373\u65F6\u67E5\u8BE2: historyId=${historyId}, status=${status}, failCode=${failCode || "\u65E0"}, items=${item_list.length}`);
+    if (status === 20) {
+      return null;
+    }
+    if (status === 30) {
+      logger_default.warn(`\u5373\u65F6\u67E5\u8BE2: \u89C6\u9891\u751F\u6210\u5931\u8D25, historyId=${historyId}, failCode=${failCode}`);
+      return null;
+    }
+    const itemId = ((_b = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _b.item_id) || ((_c = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _c.id) || ((_d = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _d.local_item_id) || ((_f = (_e = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _e.common_attr) == null ? void 0 : _f.id);
+    if (itemId) {
+      try {
+        const hqVideoUrl = await fetchHighQualityVideoUrl(String(itemId), refreshToken);
+        if (hqVideoUrl) {
+          logger_default.info(`\u5373\u65F6\u67E5\u8BE2: \u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u6210\u529F, historyId=${historyId}`);
+          return hqVideoUrl;
+        }
+      } catch (error) {
+        logger_default.warn(`\u5373\u65F6\u67E5\u8BE2: \u83B7\u53D6\u9AD8\u8D28\u91CF\u89C6\u9891URL\u5931\u8D25: ${error.message}`);
+      }
+    }
+    const videoUrl = ((_j = (_i = (_h = (_g = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _g.video) == null ? void 0 : _h.transcoded_video) == null ? void 0 : _i.origin) == null ? void 0 : _j.video_url) || ((_l = (_k = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _k.video) == null ? void 0 : _l.play_url) || ((_n = (_m = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _m.video) == null ? void 0 : _n.download_url) || ((_p = (_o = item_list == null ? void 0 : item_list[0]) == null ? void 0 : _o.video) == null ? void 0 : _p.url);
+    if (videoUrl) {
+      logger_default.info(`\u5373\u65F6\u67E5\u8BE2: \u83B7\u53D6\u9884\u89C8\u89C6\u9891URL\u6210\u529F, historyId=${historyId}`);
+      return videoUrl;
+    }
+    if (item_list.length === 0) {
+      logger_default.info(`\u5373\u65F6\u67E5\u8BE2: item_list \u4E3A\u7A7A\uFF0C\u53EF\u80FD\u4ECD\u5728\u5904\u7406, historyId=${historyId}`);
+      return null;
+    }
+    logger_default.warn(`\u5373\u65F6\u67E5\u8BE2: item_list \u975E\u7A7A\u4F46\u65E0\u6CD5\u63D0\u53D6\u89C6\u9891URL, historyId=${historyId}`);
+    return null;
+  } catch (error) {
+    logger_default.error(`\u5373\u65F6\u67E5\u8BE2\u51FA\u9519: historyId=${historyId}, ${error.message}`);
+    return null;
+  }
+}
+function clearTaskRuntimeWaiters(task) {
+  task._resolve = void 0;
+  task._promise = void 0;
+}
+var ASYNC_TASK_DIR = path6.join(process.cwd(), "tmp", "async-tasks");
+var asyncTaskStore = /* @__PURE__ */ new Map();
+var activeAsyncCount = 0;
+var MAX_ASYNC_CONCURRENCY = 10;
+var TASK_EXPIRY_MS = 24 * 60 * 60 * 1e3;
+function taskFilePath(taskId) {
+  return path6.join(ASYNC_TASK_DIR, `${taskId}.json`);
+}
+function saveTaskToFile(task) {
+  try {
+    const data = {
+      taskId: task.taskId,
+      status: task.status,
+      model: task.model,
+      prompt: task.prompt,
+      refreshToken: task.refreshToken,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      historyId: task.historyId,
+      result: task.result,
+      error: task.error
+    };
+    fs7.writeFileSync(taskFilePath(task.taskId), JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    logger_default.error(`\u4FDD\u5B58\u4EFB\u52A1\u6587\u4EF6\u5931\u8D25: ${task.taskId}, ${err.message}`);
+  }
+}
+function loadTaskFromFile(filePath) {
+  try {
+    const raw = fs7.readFileSync(filePath, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    logger_default.error(`\u52A0\u8F7D\u4EFB\u52A1\u6587\u4EF6\u5931\u8D25: ${filePath}, ${err.message}`);
+    return null;
+  }
+}
+function deleteTaskFile(taskId) {
+  try {
+    const fp = taskFilePath(taskId);
+    if (fs7.existsSync(fp)) {
+      fs7.unlinkSync(fp);
+    }
+  } catch (err) {
+    logger_default.error(`\u5220\u9664\u4EFB\u52A1\u6587\u4EF6\u5931\u8D25: ${taskId}, ${err.message}`);
+  }
+}
+function restoreTasksFromFiles() {
+  try {
+    if (!fs7.existsSync(ASYNC_TASK_DIR)) {
+      fs7.mkdirSync(ASYNC_TASK_DIR, { recursive: true });
+      return;
+    }
+    const files = fs7.readdirSync(ASYNC_TASK_DIR).filter((f) => f.endsWith(".json"));
+    if (files.length === 0) return;
+    logger_default.info(`\u53D1\u73B0 ${files.length} \u4E2A\u5F02\u6B65\u4EFB\u52A1\u6587\u4EF6\uFF0C\u5F00\u59CB\u6062\u590D...`);
+    for (const file of files) {
+      const data = loadTaskFromFile(path6.join(ASYNC_TASK_DIR, file));
+      if (!data) continue;
+      if (Date.now() - data.updatedAt > TASK_EXPIRY_MS) {
+        deleteTaskFile(data.taskId);
+        logger_default.info(`\u6062\u590D\u65F6\u6E05\u7406\u8FC7\u671F\u4EFB\u52A1: ${data.taskId}`);
+        continue;
+      }
+      if (data.status !== "processing") {
+        const task2 = data;
+        asyncTaskStore.set(data.taskId, task2);
+        logger_default.info(`\u6062\u590D\u5DF2\u5B8C\u6210\u4EFB\u52A1: ${data.taskId}, \u72B6\u6001: ${data.status}`);
+        continue;
+      }
+      if (activeAsyncCount >= MAX_ASYNC_CONCURRENCY) {
+        logger_default.warn(`\u6062\u590D\u4EFB\u52A1 ${data.taskId} \u8DF3\u8FC7\uFF1A\u5E76\u53D1\u5DF2\u6EE1 ${activeAsyncCount}/${MAX_ASYNC_CONCURRENCY}`);
+        const task2 = data;
+        asyncTaskStore.set(data.taskId, task2);
+        continue;
+      }
+      const task = {
+        ...data,
+        _promise: void 0,
+        _resolve: void 0
+      };
+      task._promise = new Promise((resolve) => {
+        task._resolve = resolve;
+      });
+      asyncTaskStore.set(data.taskId, task);
+      activeAsyncCount++;
+      logger_default.info(`\u6062\u590D\u5E76\u91CD\u542F processing \u4EFB\u52A1: ${data.taskId}, \u5F53\u524D\u5E76\u53D1: ${activeAsyncCount}/${MAX_ASYNC_CONCURRENCY}`);
+      restartPollingForTask(task);
+    }
+    logger_default.info(`\u4EFB\u52A1\u6062\u590D\u5B8C\u6210\uFF0C\u5F53\u524D\u6D3B\u8DC3\u5E76\u53D1: ${activeAsyncCount}/${MAX_ASYNC_CONCURRENCY}`);
+  } catch (err) {
+    logger_default.error(`\u6062\u590D\u4EFB\u52A1\u6587\u4EF6\u51FA\u9519: ${err.message}`);
+  }
+}
+function restartPollingForTask(task) {
+  (async () => {
+    try {
+      if (!task.historyId) {
+        task.status = "failed";
+        task.error = "\u4EFB\u52A1\u7F3A\u5C11 historyId\uFF0C\u65E0\u6CD5\u6062\u590D\u8F6E\u8BE2";
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.error(`\u6062\u590D\u4EFB\u52A1\u5931\u8D25: ${task.taskId}, \u7F3A\u5C11 historyId`);
+        return;
+      }
+      logger_default.info(`\u6062\u590D\u4EFB\u52A1\u8F6E\u8BE2: ${task.taskId}, historyId=${task.historyId}`);
+      const videoUrl = await pollVideoResult(task.historyId, task.refreshToken);
+      task.status = "succeeded";
+      task.result = { url: videoUrl, revised_prompt: task.prompt };
+      task.updatedAt = Date.now();
+      saveTaskToFile(task);
+      logger_default.info(`\u6062\u590D\u4EFB\u52A1\u8F6E\u8BE2\u6210\u529F: ${task.taskId}`);
+    } catch (error) {
+      const errorMsg = (error == null ? void 0 : error.message) || "";
+      if (errorMsg.includes("\u8D85\u65F6")) {
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.warn(`\u6062\u590D\u4EFB\u52A1\u8F6E\u8BE2\u8D85\u65F6\uFF0C\u4FDD\u6301 processing \u72B6\u6001: ${task.taskId}, historyId=${task.historyId}\uFF0C\u7B49\u5F85\u7528\u6237\u67E5\u8BE2\u65F6 on-demand \u68C0\u67E5`);
+      } else {
+        task.status = "failed";
+        task.error = error instanceof APIException ? `[${error.code}] ${error.message}` : errorMsg || "\u672A\u77E5\u9519\u8BEF";
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.error(`\u6062\u590D\u4EFB\u52A1\u8F6E\u8BE2\u5931\u8D25: ${task.taskId}, ${task.error}`);
+      }
+    } finally {
+      activeAsyncCount--;
+      if (task._resolve) task._resolve();
+      clearTaskRuntimeWaiters(task);
+    }
+  })();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [taskId, task] of asyncTaskStore) {
+    if (now - task.updatedAt > TASK_EXPIRY_MS) {
+      asyncTaskStore.delete(taskId);
+      deleteTaskFile(taskId);
+      logger_default.info(`\u5F02\u6B65\u4EFB\u52A1\u5DF2\u8FC7\u671F\u6E05\u7406: ${taskId}`);
+    }
+  }
+}, 30 * 60 * 1e3);
+restoreTasksFromFiles();
+async function _generateVideoWithHistoryId(_model, prompt, options, refreshToken, onHistoryId) {
+  const model = getModel2(_model);
+  const { ratio = "1:1", resolution = "720p", duration = 5, filePaths = [], files = [] } = options;
+  const { width, height } = resolveVideoResolution(resolution, ratio);
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-\u666E\u901A\u89C6\u9891: \u6A21\u578B=${_model} \u6620\u5C04=${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F=${duration}\u79D2`);
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0) await receiveCredit(refreshToken);
+  let first_frame_image = void 0;
+  let end_frame_image = void 0;
+  if (files && files.length > 0) {
+    let uploadIDs = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file || !file.filepath) continue;
+      try {
+        const buffer = fs7.readFileSync(file.filepath);
+        const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
+        if (imageUri) uploadIDs.push(imageUri);
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+    if (uploadIDs.length === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25");
+    if (uploadIDs[0]) {
+      first_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[0], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[0], width };
+    }
+    if (uploadIDs[1]) {
+      end_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[1], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[1], width };
+    }
+  } else if (filePaths && filePaths.length > 0) {
+    let uploadIDs = [];
+    for (let i = 0; i < filePaths.length; i++) {
+      if (!filePaths[i]) continue;
+      try {
+        const imageUri = await uploadImageForVideo(filePaths[i], refreshToken);
+        if (imageUri) uploadIDs.push(imageUri);
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u5E27\u56FE\u7247\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+    if (uploadIDs.length === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, "\u6240\u6709\u56FE\u7247\u4E0A\u4F20\u5931\u8D25");
+    if (uploadIDs[0]) {
+      first_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[0], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[0], width };
+    }
+    if (uploadIDs[1]) {
+      end_frame_image = { format: "", height, id: util_default.uuid(), image_uri: uploadIDs[1], name: "", platform_type: 1, source_from: "upload", type: "image", uri: uploadIDs[1], width };
+    }
+  }
+  const componentId = util_default.uuid();
+  const metricsExtra = JSON.stringify({
+    "enterFrom": "click",
+    "isDefaultSeed": 1,
+    "promptSource": "custom",
+    "isRegenerate": false,
+    "originSubmitId": util_default.uuid()
+  });
+  const draftVersion = MODEL_DRAFT_VERSIONS2[_model] || DEFAULT_DRAFT_VERSION;
+  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  const divisor = gcd(width, height);
+  const aspectRatio = `${width / divisor}:${height / divisor}`;
+  const { aigc_data } = await request("post", "/mweb/v1/aigc_draft/generate", refreshToken, {
+    params: {
+      aigc_features: "app_lip_sync",
+      web_version: "6.6.0",
+      da_version: draftVersion
+    },
+    data: {
+      "extend": {
+        "root_model": end_frame_image ? MODEL_MAP2["jimeng-video-3.0"] : model,
+        "m_video_commerce_info": { benefit_type: "basic_video_operation_vgfm_v_three", resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" },
+        "m_video_commerce_info_list": [{ benefit_type: "basic_video_operation_vgfm_v_three", resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" }]
+      },
+      "submit_id": util_default.uuid(),
+      "metrics_extra": metricsExtra,
+      "draft_content": JSON.stringify({
+        "type": "draft",
+        "id": util_default.uuid(),
+        "min_version": "3.0.5",
+        "is_from_tsn": true,
+        "version": draftVersion,
+        "main_component_id": componentId,
+        "component_list": [{
+          "type": "video_base_component",
+          "id": componentId,
+          "min_version": "1.0.0",
+          "metadata": { "type": "", "id": util_default.uuid(), "created_platform": 3, "created_platform_version": "", "created_time_in_ms": Date.now(), "created_did": "" },
+          "generate_type": "gen_video",
+          "aigc_mode": "workbench",
+          "abilities": {
+            "type": "",
+            "id": util_default.uuid(),
+            "gen_video": {
+              "id": util_default.uuid(),
+              "type": "",
+              "text_to_video_params": {
+                "type": "",
+                "id": util_default.uuid(),
+                "model_req_key": model,
+                "priority": 0,
+                "seed": Math.floor(Math.random() * 1e8) + 25e8,
+                "video_aspect_ratio": aspectRatio,
+                "video_gen_inputs": [{
+                  duration_ms: duration * 1e3,
+                  first_frame_image,
+                  end_frame_image,
+                  fps: 24,
+                  id: util_default.uuid(),
+                  min_version: "3.0.5",
+                  prompt,
+                  resolution,
+                  type: "",
+                  video_mode: 2
+                }]
+              },
+              "video_task_extra": metricsExtra
+            }
+          }
+        }]
+      }),
+      http_common_info: { aid: DEFAULT_ASSISTANT_ID3 }
+    }
+  });
+  const historyId = aigc_data.history_record_id;
+  if (!historyId) throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-\u666E\u901A\u89C6\u9891: \u751F\u6210\u8BF7\u6C42\u5DF2\u63D0\u4EA4, historyId=${historyId}`);
+  if (onHistoryId) onHistoryId(historyId);
+  const videoUrl = await pollVideoResult(historyId, refreshToken);
+  return { url: videoUrl, historyId };
+}
+async function _generateSeedanceVideoWithHistoryId(_model, prompt, options, refreshToken, onHistoryId) {
+  const model = getModel2(_model);
+  const benefitType = SEEDANCE_BENEFIT_TYPE_MAP[_model] || "dreamina_video_seedance_20_pro";
+  const { ratio = "4:3", resolution = "720p", duration = 4, filePaths = [], files = [] } = options;
+  const actualDuration = duration || 4;
+  const { width, height } = resolveVideoResolution(resolution, ratio);
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-Seedance: \u6A21\u578B=${_model} \u6620\u5C04=${model} ${width}x${height} (${ratio}@${resolution}) \u65F6\u957F=${actualDuration}\u79D2`);
+  const { totalCredit } = await getCredit(refreshToken);
+  if (totalCredit <= 0) await receiveCredit(refreshToken);
+  let uploadedMaterials = [];
+  if (files && files.length > 0) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file || !file.filepath) continue;
+      const materialType = detectMaterialType(file);
+      try {
+        const buffer = fs7.readFileSync(file.filepath);
+        if (materialType === "image") {
+          const imageUri = await uploadImageBufferForVideo(buffer, refreshToken);
+          if (imageUri) uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
+        } else {
+          const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken, file.originalFilename);
+          uploadedMaterials.push({ type: materialType, vid: vodResult.vid, width: vodResult.width, height: vodResult.height, duration: vodResult.duration, fps: vodResult.fps, name: file.originalFilename || "" });
+        }
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+  } else if (filePaths && filePaths.length > 0) {
+    for (let i = 0; i < filePaths.length; i++) {
+      if (!filePaths[i]) continue;
+      const materialType = detectMaterialTypeFromUrl(filePaths[i]);
+      try {
+        if (materialType === "image") {
+          const imageUri = await uploadImageForVideo(filePaths[i], refreshToken);
+          if (imageUri) uploadedMaterials.push({ type: "image", uri: imageUri, width, height });
+        } else {
+          const response = await fetch(filePaths[i]);
+          if (!response.ok) throw new Error(`\u4E0B\u8F7D\u6587\u4EF6\u5931\u8D25: ${response.status}`);
+          const buffer = Buffer.from(await response.arrayBuffer());
+          const vodResult = await uploadMediaForVideo(buffer, materialType, refreshToken);
+          uploadedMaterials.push({ type: materialType, vid: vodResult.vid, width: vodResult.width, height: vodResult.height, duration: vodResult.duration, fps: vodResult.fps });
+        }
+      } catch (error) {
+        if (i === 0) throw new APIException(exceptions_default.API_REQUEST_FAILED, `\u9996\u4E2A\u6587\u4EF6\u4E0A\u4F20\u5931\u8D25: ${error.message}`);
+      }
+    }
+  }
+  if (uploadedMaterials.length === 0) {
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, "Seedance 2.0 \u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u6587\u4EF6");
+  }
+  const hasVideoMaterial = uploadedMaterials.some((m) => m.type === "video");
+  const finalBenefitType = hasVideoMaterial ? `${benefitType}_with_video` : benefitType;
+  const materialList = uploadedMaterials.map((mat) => {
+    const base = { type: "", id: util_default.uuid() };
+    if (mat.type === "image") {
+      return { ...base, material_type: "image", image_info: { type: "image", id: util_default.uuid(), source_from: "upload", platform_type: 1, name: "", image_uri: mat.uri, aigc_image: { type: "", id: util_default.uuid() }, width: mat.width, height: mat.height, format: "", uri: mat.uri } };
+    } else if (mat.type === "video") {
+      return { ...base, material_type: "video", video_info: { type: "video", id: util_default.uuid(), source_from: "upload", name: mat.name || "", vid: mat.vid, fps: mat.fps || 0, width: mat.width || 0, height: mat.height || 0, duration: mat.duration || 0 } };
+    } else {
+      return { ...base, material_type: "audio", audio_info: { type: "audio", id: util_default.uuid(), source_from: "upload", vid: mat.vid, duration: mat.duration || 0, name: mat.name || "" } };
+    }
+  });
+  const metaList = buildMetaListFromPrompt(prompt, uploadedMaterials);
+  const componentId = util_default.uuid();
+  const submitId = util_default.uuid();
+  const draftVersion = MODEL_DRAFT_VERSIONS2[_model] || "3.3.9";
+  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  const divisor = gcd(width, height);
+  const aspectRatio = `${width / divisor}:${height / divisor}`;
+  const metricsExtra = JSON.stringify({
+    isDefaultSeed: 1,
+    originSubmitId: submitId,
+    isRegenerate: false,
+    enterFrom: "click",
+    position: "page_bottom_box",
+    functionMode: "omni_reference",
+    sceneOptions: JSON.stringify([{ type: "video", scene: "BasicVideoGenerateButton", modelReqKey: model, videoDuration: actualDuration, reportParams: { enterSource: "generate", vipSource: "generate", extraVipFunctionKey: model, useVipFunctionDetailsReporterHoc: true }, materialTypes: [...new Set(uploadedMaterials.map((m) => MATERIAL_TYPE_CODE[m.type]))] }])
+  });
+  const token = await acquireToken(refreshToken);
+  const generateQueryParams = new URLSearchParams({
+    aid: String(DEFAULT_ASSISTANT_ID),
+    device_platform: "web",
+    region: "cn",
+    webId: String(WEB_ID),
+    da_version: draftVersion,
+    web_component_open_flag: "1",
+    commerce_with_input_video: "1",
+    web_version: "7.5.0",
+    aigc_features: "app_lip_sync"
+  });
+  const generateUrl = `https://jimeng.jianying.com/mweb/v1/aigc_draft/generate?${generateQueryParams.toString()}`;
+  const generateBody = {
+    extend: {
+      root_model: model,
+      workspace_id: 0,
+      m_video_commerce_info: { benefit_type: finalBenefitType, resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" },
+      m_video_commerce_info_list: [{ benefit_type: finalBenefitType, resource_id: "generate_video", resource_id_type: "str", resource_sub_type: "aigc" }]
+    },
+    submit_id: submitId,
+    metrics_extra: metricsExtra,
+    draft_content: JSON.stringify({
+      type: "draft",
+      id: util_default.uuid(),
+      min_version: draftVersion,
+      min_features: ["AIGC_Video_UnifiedEdit"],
+      is_from_tsn: true,
+      version: draftVersion,
+      main_component_id: componentId,
+      component_list: [{
+        type: "video_base_component",
+        id: componentId,
+        min_version: "1.0.0",
+        aigc_mode: "workbench",
+        metadata: { type: "", id: util_default.uuid(), created_platform: 3, created_platform_version: "", created_time_in_ms: String(Date.now()), created_did: "" },
+        generate_type: "gen_video",
+        abilities: {
+          type: "",
+          id: util_default.uuid(),
+          gen_video: {
+            type: "",
+            id: util_default.uuid(),
+            text_to_video_params: {
+              type: "",
+              id: util_default.uuid(),
+              video_gen_inputs: [{
+                type: "",
+                id: util_default.uuid(),
+                min_version: draftVersion,
+                prompt: "",
+                video_mode: 2,
+                fps: 24,
+                duration_ms: actualDuration * 1e3,
+                idip_meta_list: [],
+                unified_edit_input: { type: "", id: util_default.uuid(), material_list: materialList, meta_list: metaList }
+              }],
+              video_aspect_ratio: aspectRatio,
+              seed: Math.floor(Math.random() * 1e9),
+              model_req_key: model,
+              priority: 0
+            },
+            video_task_extra: metricsExtra
+          }
+        },
+        process_type: 1
+      }]
+    }),
+    http_common_info: { aid: DEFAULT_ASSISTANT_ID }
+  };
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-Seedance: \u901A\u8FC7\u6D4F\u89C8\u5668\u4EE3\u7406\u53D1\u9001 generate \u8BF7\u6C42...`);
+  const generateResult = await browser_service_default.fetch(token, generateUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(generateBody)
+  });
+  const { ret, errmsg, data: generateData } = generateResult;
+  if (ret !== void 0 && Number(ret) !== 0) {
+    if (Number(ret) === 5e3) {
+      throw new APIException(exceptions_default.API_IMAGE_GENERATION_INSUFFICIENT_POINTS, `[\u65E0\u6CD5\u751F\u6210\u89C6\u9891]: \u5373\u68A6\u79EF\u5206\u53EF\u80FD\u4E0D\u8DB3\uFF0C${errmsg}`);
+    }
+    throw new APIException(exceptions_default.API_REQUEST_FAILED, `[\u8BF7\u6C42jimeng\u5931\u8D25]: ${errmsg}`);
+  }
+  const aigc_data = (generateData == null ? void 0 : generateData.aigc_data) || generateResult.aigc_data;
+  const historyId = aigc_data.history_record_id;
+  if (!historyId) throw new APIException(exceptions_default.API_IMAGE_GENERATION_FAILED, "\u8BB0\u5F55ID\u4E0D\u5B58\u5728");
+  logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-Seedance: \u751F\u6210\u8BF7\u6C42\u5DF2\u63D0\u4EA4, historyId=${historyId}`);
+  if (onHistoryId) onHistoryId(historyId);
+  const videoUrl = await pollVideoResult(historyId, refreshToken);
+  return { url: videoUrl, historyId };
+}
+function submitAsyncVideoTask(model, prompt, options, refreshToken) {
+  if (activeAsyncCount >= MAX_ASYNC_CONCURRENCY) {
+    throw new APIException(
+      exceptions_default.API_REQUEST_FAILED,
+      `\u5F53\u524D\u5F02\u6B65\u4EFB\u52A1\u5E76\u53D1\u6570\u5DF2\u8FBE\u4E0A\u9650 (${MAX_ASYNC_CONCURRENCY})\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`
+    );
+  }
+  if (!fs7.existsSync(ASYNC_TASK_DIR)) {
+    fs7.mkdirSync(ASYNC_TASK_DIR, { recursive: true });
+  }
+  const taskId = util_default.uuid();
+  const task = {
+    taskId,
+    status: "processing",
+    model,
+    prompt,
+    refreshToken,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  task._promise = new Promise((resolve) => {
+    task._resolve = resolve;
+  });
+  asyncTaskStore.set(taskId, task);
+  saveTaskToFile(task);
+  activeAsyncCount++;
+  logger_default.info(
+    `\u5F02\u6B65\u4EFB\u52A1\u5DF2\u521B\u5EFA: ${taskId}, \u6A21\u578B: ${model}, \u5F53\u524D\u5E76\u53D1: ${activeAsyncCount}/${MAX_ASYNC_CONCURRENCY}`
+  );
+  (async () => {
+    try {
+      let videoUrl;
+      if (isSeedanceModel(model)) {
+        const seedanceDuration = options.duration === 5 ? 4 : options.duration;
+        const seedanceRatio = options.ratio === "1:1" ? "4:3" : options.ratio;
+        const { url } = await _generateSeedanceVideoWithHistoryId(
+          model,
+          prompt,
+          {
+            ratio: seedanceRatio,
+            resolution: options.resolution,
+            duration: seedanceDuration,
+            filePaths: options.filePaths,
+            files: options.files
+          },
+          refreshToken,
+          // onHistoryId 回调：在获取到 historyId 后立即保存到 task 文件
+          (historyId) => {
+            task.historyId = historyId;
+            saveTaskToFile(task);
+            logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-Seedance: historyId \u5DF2\u4FDD\u5B58, ${taskId} -> ${historyId}`);
+          }
+        );
+        videoUrl = url;
+      } else {
+        const { url } = await _generateVideoWithHistoryId(
+          model,
+          prompt,
+          {
+            ratio: options.ratio,
+            resolution: options.resolution,
+            duration: options.duration,
+            filePaths: options.filePaths,
+            files: options.files
+          },
+          refreshToken,
+          // onHistoryId 回调：在获取到 historyId 后立即保存到 task 文件
+          (historyId) => {
+            task.historyId = historyId;
+            saveTaskToFile(task);
+            logger_default.info(`\u5F02\u6B65\u4EFB\u52A1-\u666E\u901A\u89C6\u9891: historyId \u5DF2\u4FDD\u5B58, ${taskId} -> ${historyId}`);
+          }
+        );
+        videoUrl = url;
+      }
+      task.status = "succeeded";
+      task.result = {
+        url: videoUrl,
+        revised_prompt: prompt
+      };
+      task.updatedAt = Date.now();
+      saveTaskToFile(task);
+      logger_default.info(`\u5F02\u6B65\u4EFB\u52A1\u6210\u529F: ${taskId}, \u89C6\u9891URL: ${videoUrl}`);
+    } catch (error) {
+      const errorMsg = (error == null ? void 0 : error.message) || "";
+      if (errorMsg.includes("\u8D85\u65F6")) {
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.warn(`\u5F02\u6B65\u4EFB\u52A1\u540E\u53F0\u8F6E\u8BE2\u8D85\u65F6\uFF0C\u4FDD\u6301 processing \u72B6\u6001: ${taskId}, historyId=${task.historyId}\uFF0C\u7B49\u5F85\u7528\u6237\u67E5\u8BE2\u65F6 on-demand \u68C0\u67E5`);
+      } else {
+        task.status = "failed";
+        task.error = error instanceof APIException ? `[${error.code}] ${error.message}` : errorMsg || "\u672A\u77E5\u9519\u8BEF";
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.error(`\u5F02\u6B65\u4EFB\u52A1\u5931\u8D25: ${taskId}, \u9519\u8BEF: ${task.error}`);
+      }
+    } finally {
+      activeAsyncCount--;
+      if (task._resolve) {
+        task._resolve();
+      }
+      clearTaskRuntimeWaiters(task);
+    }
+  })();
+  return taskId;
+}
+async function queryAsyncVideoTask(taskId) {
+  let task = asyncTaskStore.get(taskId);
+  if (!task) {
+    const fp = taskFilePath(taskId);
+    if (!fs7.existsSync(fp)) {
+      throw new APIException(
+        exceptions_default.API_REQUEST_PARAMS_INVALID,
+        `\u4EFB\u52A1ID\u4E0D\u5B58\u5728\u6216\u5DF2\u8FC7\u671F: ${taskId}`
+      );
+    }
+    const data = loadTaskFromFile(fp);
+    if (!data) {
+      throw new APIException(
+        exceptions_default.API_REQUEST_PARAMS_INVALID,
+        `\u4EFB\u52A1\u6570\u636E\u635F\u574F: ${taskId}`
+      );
+    }
+    task = data;
+    asyncTaskStore.set(taskId, task);
+    logger_default.info(`\u4ECE\u6587\u4EF6\u52A0\u8F7D\u4EFB\u52A1: ${taskId}, \u72B6\u6001: ${task.status}`);
+  }
+  if (task.status === "succeeded" || task.status === "failed") {
+    return task;
+  }
+  if (task.status === "processing") {
+    if (task._promise) {
+      logger_default.info(`\u67E5\u8BE2\u63A5\u53E3\u7B49\u5F85\u540E\u53F0\u8F6E\u8BE2\u5B8C\u6210: ${taskId}`);
+      await task._promise;
+      if (task.status === "succeeded" || task.status === "failed") {
+        return task;
+      }
+    }
+    if (task.historyId) {
+      logger_default.info(`on-demand \u5373\u65F6\u67E5\u8BE2: ${taskId}, historyId=${task.historyId}`);
+      const videoUrl = await checkVideoStatusByHistoryId(task.historyId, task.refreshToken);
+      if (videoUrl) {
+        task.status = "succeeded";
+        task.result = { url: videoUrl, revised_prompt: task.prompt };
+        task.updatedAt = Date.now();
+        saveTaskToFile(task);
+        logger_default.info(`on-demand \u67E5\u8BE2\u53D1\u73B0\u89C6\u9891\u5DF2\u5B8C\u6210: ${taskId}, URL: ${videoUrl}`);
+      } else {
+        logger_default.info(`on-demand \u67E5\u8BE2: \u89C6\u9891\u4ECD\u5728\u5904\u7406\u4E2D, ${taskId}`);
+      }
+    } else {
+      logger_default.warn(`processing \u4EFB\u52A1\u7F3A\u5C11 historyId\uFF0C\u65E0\u6CD5 on-demand \u67E5\u8BE2: ${taskId}`);
+    }
+  }
+  return task;
 }
 
 // src/api/controllers/chat.ts
@@ -5915,22 +7875,10 @@ var models_default = {
             "description": "\u5373\u68A6AI\u89C6\u9891\u751F\u6210\u6A21\u578B 3.0 \u4E13\u4E1A\u7248"
           },
           {
-            "id": "jimeng-video-2.0",
-            "object": "model",
-            "owned_by": "jimeng-free-api",
-            "description": "\u5373\u68A6AI\u89C6\u9891\u751F\u6210\u6A21\u578B 2.0 \u7248\u672C"
-          },
-          {
-            "id": "jimeng-video-2.0-pro",
-            "object": "model",
-            "owned_by": "jimeng-free-api",
-            "description": "\u5373\u68A6AI\u89C6\u9891\u751F\u6210\u6A21\u578B 2.0 \u4E13\u4E1A\u7248"
-          },
-          {
             "id": "jimeng-video-seedance-2.0",
             "object": "model",
             "owned_by": "jimeng-free-api",
-            "description": "Seedance 2.0 \u591A\u56FE\u667A\u80FD\u89C6\u9891\u751F\u6210\u6A21\u578B\uFF08\u4E0A\u6E38\u6807\u51C6\u540D\u79F0\uFF0C\u652F\u63014-15\u79D2\uFF0C\u591A\u5F20\u56FE\u7247\u6DF7\u5408\u751F\u6210\u89C6\u9891\uFF09"
+            "description": "Seedance 2.0 \u591A\u56FE\u667A\u80FD\u89C6\u9891\u751F\u6210\u6A21\u578B\uFF08\u56FD\u5185\u517C\u5BB9\u63A5\u53E3\u53EF\u7528\uFF1B\u56FD\u9645 token hk-/jp-/sg- \u5EFA\u8BAE\u8D70 /v1/videos/international/generations\uFF09"
           },
           {
             "id": "seedance-2.0",
@@ -5948,13 +7896,37 @@ var models_default = {
             "id": "jimeng-video-seedance-2.0-fast",
             "object": "model",
             "owned_by": "jimeng-free-api",
-            "description": "Seedance 2.0-fast \u5FEB\u901F\u591A\u56FE\u667A\u80FD\u89C6\u9891\u751F\u6210\u6A21\u578B\uFF08\u4E0A\u6E38\u6807\u51C6\u540D\u79F0\uFF0C\u652F\u63014-15\u79D2\uFF09"
+            "description": "Seedance 2.0-fast \u5FEB\u901F\u591A\u56FE\u667A\u80FD\u89C6\u9891\u751F\u6210\u6A21\u578B\uFF08\u56FD\u5185\u517C\u5BB9\u63A5\u53E3\u53EF\u7528\uFF1B\u56FD\u9645 token hk-/jp-/sg- \u5EFA\u8BAE\u8D70 /v1/videos/international/generations\uFF09"
           },
           {
             "id": "seedance-2.0-fast",
             "object": "model",
             "owned_by": "jimeng-free-api",
             "description": "Seedance 2.0-fast \u5FEB\u901F\u591A\u56FE\u667A\u80FD\u89C6\u9891\u751F\u6210\u6A21\u578B\uFF08jimeng-video-seedance-2.0-fast \u7684\u522B\u540D\uFF0C\u5411\u540E\u517C\u5BB9\uFF09"
+          },
+          {
+            "id": "jimeng-video-seedance-2.0-fast-vip",
+            "object": "model",
+            "owned_by": "jimeng-free-api",
+            "description": "Seedance 2.0 Fast VIP Vision \u6587\u751F\u89C6\u9891\u6A21\u578B\uFF08dreamina_seedance_40_vision\uFF0CVIP \u5FEB\u901F\u7248\uFF0C\u652F\u6301\u6587\u751F\u89C6\u9891\u548C\u56FE\u751F\u89C6\u9891\uFF09"
+          },
+          {
+            "id": "seedance-2.0-fast-vip",
+            "object": "model",
+            "owned_by": "jimeng-free-api",
+            "description": "Seedance 2.0 Fast VIP Vision \u6587\u751F\u89C6\u9891\u6A21\u578B\uFF08jimeng-video-seedance-2.0-fast-vip \u7684\u522B\u540D\uFF0C\u5411\u540E\u517C\u5BB9\uFF09"
+          },
+          {
+            "id": "jimeng-video-seedance-2.0-vip",
+            "object": "model",
+            "owned_by": "jimeng-free-api",
+            "description": "Seedance 2.0 VIP Vision \u4E3B\u6A21\u6001\u80FD\u529B\u89C6\u9891\u6A21\u578B\uFF08dreamina_seedance_40_pro_vision\uFF0CVIP \u4E13\u4E1A\u7248\uFF0C\u4E3B\u6A21\u6001\u80FD\u529B\uFF09"
+          },
+          {
+            "id": "seedance-2.0-vip",
+            "object": "model",
+            "owned_by": "jimeng-free-api",
+            "description": "Seedance 2.0 VIP Vision \u4E3B\u6A21\u6001\u80FD\u529B\u89C6\u9891\u6A21\u578B\uFF08jimeng-video-seedance-2.0-vip \u7684\u522B\u540D\uFF0C\u5411\u540E\u517C\u5BB9\uFF09"
           }
         ]
       };
@@ -5964,8 +7936,6 @@ var models_default = {
 
 // src/api/routes/videos.ts
 import _16 from "lodash";
-import os3 from "os";
-var MEMORY_GATE_MB = parseInt(process.env.MEMORY_GATE_MB || "100", 10);
 var videos_default = {
   prefix: "/v1/videos",
   post: {
@@ -5974,7 +7944,7 @@ var videos_default = {
       const bodyKeys = Object.keys(request2.body);
       const foundUnsupported = unsupportedParams.filter((param) => bodyKeys.includes(param));
       if (foundUnsupported.length > 0) {
-        throw new Error(`Unsupported parameters: ${foundUnsupported.join(", ")}. Use ratio and resolution to control video dimensions.`);
+        throw new Error(`\u4E0D\u652F\u6301\u7684\u53C2\u6570: ${foundUnsupported.join(", ")}\u3002\u8BF7\u4F7F\u7528 ratio \u548C resolution \u53C2\u6570\u63A7\u5236\u89C6\u9891\u5C3A\u5BF8\u3002`);
       }
       const contentType = request2.headers["content-type"] || "";
       const isMultiPart = contentType.startsWith("multipart/form-data");
@@ -6000,88 +7970,336 @@ var videos_default = {
       } = request2.body;
       const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
       const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
-      const freeMB = Math.round(os3.freemem() / 1024 / 1024);
-      if (freeMB < MEMORY_GATE_MB) {
-        logger_default.warn(`VideoRoute: memory gate triggered - ${freeMB}MB free, need ${MEMORY_GATE_MB}MB, rejecting job`);
-        return new Response(
-          { error: { message: `Service temporarily unavailable: low memory (${freeMB}MB free). Please retry in 60 seconds.`, type: "server_error", code: "service_unavailable" } },
-          { statusCode: 503, headers: { "Retry-After": "60" } }
+      let videoUrl;
+      if (isSeedanceModel(model)) {
+        const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
+        const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
+        videoUrl = await generateSeedanceVideo(
+          model,
+          prompt,
+          {
+            ratio: seedanceRatio,
+            resolution,
+            duration: seedanceDuration,
+            filePaths: finalFilePaths,
+            files: request2.files
+          },
+          token
+        );
+      } else {
+        videoUrl = await generateVideo(
+          model,
+          prompt,
+          {
+            ratio,
+            resolution,
+            duration: finalDuration,
+            filePaths: finalFilePaths,
+            files: request2.files
+          },
+          token
         );
       }
-      const job = createJob();
-      logger_default.info(`Job ${job.id}: created for model=${model} (memory: ${freeMB}MB free)`);
-      (async () => {
-        try {
-          updateJob(job.id, { status: "processing" });
-          await saveJobToDb(job.id, "pending", job.created);
-          await updateJobInDb(job.id, {
-            status: "processing",
-            model,
-            prompt: prompt || "",
-            response_format
-          });
-          let videoUrl;
-          if (isSeedanceModel(model)) {
-            const seedanceDuration = finalDuration === 5 ? 4 : finalDuration;
-            const seedanceRatio = ratio === "1:1" ? "4:3" : ratio;
-            videoUrl = await generateSeedanceVideo(
-              model,
-              prompt,
-              {
-                ratio: seedanceRatio,
-                resolution,
-                duration: seedanceDuration,
-                filePaths: finalFilePaths,
-                files: request2.files
-              },
-              token,
-              job.id
-            );
-          } else {
-            videoUrl = await generateVideo(
-              model,
-              prompt,
-              {
-                ratio,
-                resolution,
-                duration: finalDuration,
-                filePaths: finalFilePaths,
-                files: request2.files
-              },
-              token,
-              job.id
-            );
-          }
-          if (videoUrl === null) {
-            logger_default.info(`Job ${job.id}: handed off to background poller`);
-            browser_service_default.recordJobCompleted();
-            return;
-          }
-          if (response_format === "b64_json") {
-            const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
-            updateJob(job.id, {
-              status: "completed",
-              result: { b64_json: videoBase64, revised_prompt: prompt }
-            });
-          } else {
-            updateJob(job.id, {
-              status: "completed",
-              result: { url: videoUrl, revised_prompt: prompt }
-            });
-          }
-          logger_default.info(`Job ${job.id}: completed`);
-          browser_service_default.recordJobCompleted();
-        } catch (err) {
-          const message = (err == null ? void 0 : err.message) || String(err);
-          updateJob(job.id, { status: "failed", error: message });
-          logger_default.error(`Job ${job.id}: failed - ${message}`);
+      if (response_format === "b64_json") {
+        const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
+        return {
+          created: util_default.unixTimestamp(),
+          data: [{
+            b64_json: videoBase64,
+            revised_prompt: prompt
+          }]
+        };
+      } else {
+        return {
+          created: util_default.unixTimestamp(),
+          data: [{
+            url: videoUrl,
+            revised_prompt: prompt
+          }]
+        };
+      }
+    },
+    // ========== 异步视频生成接口：提交任务 ==========
+    "/international/generations": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      const allowedModels = [
+        "seedance-2.0-fast",
+        "seedance-2.0-pro",
+        "jimeng-video-seedance-2.0-fast",
+        "jimeng-video-seedance-2.0",
+        "jimeng-video-seedance-2.0-fast-vip",
+        "seedance-2.0-fast-vip",
+        "jimeng-video-seedance-2.0-vip",
+        "seedance-2.0-vip",
+        "jimeng-video-3.5-pro",
+        "jimeng-video-3.0",
+        "jimeng-video-3.0-pro"
+      ];
+      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
+      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
+        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
+      );
+      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.response_format", (v) => _16.isUndefined(v) || _16.isString(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model,
+        prompt = "",
+        ratio,
+        resolution = "720p",
+        duration,
+        file_paths = [],
+        filePaths = [],
+        response_format = "url"
+      } = request2.body;
+      const isSeedance = isInternationalSeedanceModel(model);
+      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
+        throw new Error("duration \u53C2\u6570\u65E0\u6548");
+      }
+      if (isSeedance) {
+        if (finalDuration < 4 || finalDuration > 15) {
+          throw new Error("\u56FD\u9645 Seedance \u6A21\u578B duration \u4EC5\u652F\u6301 4-15 \u79D2");
         }
-      })();
-      return new Response({
-        id: job.id,
-        status: job.status,
-        created: job.created
-      }, { statusCode: 202 });
+        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
+          throw new Error("\u56FD\u9645 Seedance \u63A5\u53E3\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u7D20\u6750\uFF1Akeyed multipart \u6587\u4EF6\u3001keyed URL \u5B57\u6BB5\u6216 file_paths/filePaths");
+        }
+      } else {
+        if (finalDuration !== 5 && finalDuration !== 10) {
+          throw new Error("\u56FD\u9645\u666E\u901A\u89C6\u9891\u6A21\u578B duration \u4EC5\u652F\u6301 5 \u6216 10 \u79D2");
+        }
+      }
+      let videoUrl;
+      if (isSeedance) {
+        videoUrl = await generateInternationalSeedanceVideo(
+          model,
+          prompt,
+          {
+            ratio: finalRatio,
+            resolution,
+            duration: finalDuration,
+            filePaths: finalFilePaths,
+            filesMap: request2.filesMap,
+            body: request2.body
+          },
+          token
+        );
+      } else if (isInternationalVideoModel(model)) {
+        videoUrl = await generateInternationalVideo(
+          model,
+          prompt,
+          {
+            ratio: finalRatio,
+            resolution,
+            duration: finalDuration,
+            filePaths: finalFilePaths,
+            files: request2.files
+          },
+          token
+        );
+      } else {
+        throw new Error(`\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${model}`);
+      }
+      if (response_format === "b64_json") {
+        const videoBase64 = await util_default.fetchFileBASE64(videoUrl);
+        return {
+          created: util_default.unixTimestamp(),
+          data: [{ b64_json: videoBase64, revised_prompt: prompt }]
+        };
+      }
+      return {
+        created: util_default.unixTimestamp(),
+        data: [{ url: videoUrl, revised_prompt: prompt }]
+      };
+    },
+    // ========== 国际版异步视频生成接口：提交任务 ==========
+    "/international/generations/async": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      const allowedModels = [
+        "seedance-2.0-fast",
+        "seedance-2.0-pro",
+        "jimeng-video-seedance-2.0-fast",
+        "jimeng-video-seedance-2.0",
+        "jimeng-video-seedance-2.0-fast-vip",
+        "seedance-2.0-fast-vip",
+        "jimeng-video-seedance-2.0-vip",
+        "seedance-2.0-vip",
+        "jimeng-video-3.5-pro",
+        "jimeng-video-3.0",
+        "jimeng-video-3.0-pro"
+      ];
+      const hasKeyedUrlFields = Object.keys(request2.body || {}).some((key) => (key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")) && _16.isString(request2.body[key]));
+      const hasKeyedFiles = Object.keys(request2.filesMap || {}).some(
+        (key) => key === "image_file" || key === "video_file" || key.startsWith("image_file_") || key.startsWith("video_file_")
+      );
+      request2.validate("body.model", (v) => _16.isString(v) && allowedModels.includes(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model,
+        prompt = "",
+        ratio,
+        resolution = "720p",
+        duration,
+        file_paths = [],
+        filePaths = []
+      } = request2.body;
+      const isSeedance = isInternationalSeedanceModel(model);
+      const finalDuration = _16.isUndefined(duration) ? isSeedance ? 4 : 5 : isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalRatio = _16.isUndefined(ratio) ? isSeedance ? "4:3" : "1:1" : ratio;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      if (!_16.isFinite(finalDuration) || !Number.isInteger(Number(finalDuration))) {
+        throw new Error("duration \u53C2\u6570\u65E0\u6548");
+      }
+      if (isSeedance) {
+        if (finalDuration < 4 || finalDuration > 15) {
+          throw new Error("\u56FD\u9645 Seedance \u6A21\u578B duration \u4EC5\u652F\u6301 4-15 \u79D2");
+        }
+        if (!hasKeyedFiles && !hasKeyedUrlFields && finalFilePaths.length === 0) {
+          throw new Error("\u56FD\u9645 Seedance \u63A5\u53E3\u81F3\u5C11\u9700\u8981\u4E00\u4E2A\u7D20\u6750\uFF1Akeyed multipart \u6587\u4EF6\u3001keyed URL \u5B57\u6BB5\u6216 file_paths/filePaths");
+        }
+      } else if (isInternationalVideoModel(model)) {
+        if (finalDuration !== 5 && finalDuration !== 10) {
+          throw new Error("\u56FD\u9645\u666E\u901A\u89C6\u9891\u6A21\u578B duration \u4EC5\u652F\u6301 5 \u6216 10 \u79D2");
+        }
+      } else {
+        throw new Error(`\u56FD\u9645\u63A5\u53E3\u6682\u4E0D\u652F\u6301\u6A21\u578B: ${model}`);
+      }
+      const taskId = submitInternationalAsyncVideoTask(
+        model,
+        prompt,
+        {
+          ratio: finalRatio,
+          resolution,
+          duration: finalDuration,
+          filePaths: finalFilePaths,
+          files: request2.files,
+          filesMap: request2.filesMap,
+          body: request2.body
+        },
+        token
+      );
+      return {
+        created: util_default.unixTimestamp(),
+        task_id: taskId,
+        status: "processing",
+        message: "\u4EFB\u52A1\u5DF2\u63D0\u4EA4\uFF0C\u8BF7\u4F7F\u7528 GET /v1/videos/international/generations/async/{task_id} \u67E5\u8BE2\u7ED3\u679C"
+      };
+    },
+    "/generations/async": async (request2) => {
+      const contentType = request2.headers["content-type"] || "";
+      const isMultiPart = contentType.startsWith("multipart/form-data");
+      request2.validate("body.model", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.prompt", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.ratio", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.resolution", (v) => _16.isUndefined(v) || _16.isString(v)).validate("body.duration", (v) => {
+        if (_16.isUndefined(v)) return true;
+        if (isMultiPart && typeof v === "string") {
+          const num = parseInt(v);
+          return num >= 4 && num <= 15 || num === 5 || num === 10;
+        }
+        return _16.isFinite(v) && (v >= 4 && v <= 15 || v === 5 || v === 10);
+      }).validate("body.file_paths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("body.filePaths", (v) => _16.isUndefined(v) || _16.isArray(v)).validate("headers.authorization", _16.isString);
+      const tokens = tokenSplit(request2.headers.authorization);
+      const token = _16.sample(tokens);
+      const {
+        model = DEFAULT_MODEL2,
+        prompt,
+        ratio = "1:1",
+        resolution = "720p",
+        duration = 5,
+        file_paths = [],
+        filePaths = []
+      } = request2.body;
+      const finalDuration = isMultiPart && typeof duration === "string" ? parseInt(duration) : duration;
+      const finalFilePaths = filePaths.length > 0 ? filePaths : file_paths;
+      const taskId = submitAsyncVideoTask(
+        model,
+        prompt,
+        {
+          ratio,
+          resolution,
+          duration: finalDuration,
+          filePaths: finalFilePaths,
+          files: request2.files
+        },
+        token
+      );
+      return {
+        created: util_default.unixTimestamp(),
+        task_id: taskId,
+        status: "processing",
+        message: "\u4EFB\u52A1\u5DF2\u63D0\u4EA4\uFF0C\u8BF7\u4F7F\u7528 GET /v1/videos/generations/async/{task_id} \u67E5\u8BE2\u7ED3\u679C"
+      };
+    }
+  },
+  get: {
+    // ========== 国际版异步视频生成接口：查询结果 ==========
+    "/international/generations/async/:taskId": async (request2) => {
+      const { taskId } = request2.params;
+      if (!taskId) {
+        throw new Error("\u7F3A\u5C11 task_id \u53C2\u6570");
+      }
+      const task = await queryAsyncVideoTask(taskId);
+      if (task.status === "succeeded") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "succeeded",
+          data: [{
+            url: task.result.url,
+            revised_prompt: task.result.revised_prompt
+          }]
+        };
+      } else if (task.status === "failed") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "failed",
+          error: task.error
+        };
+      } else {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: task.status,
+          message: "\u4EFB\u52A1\u5904\u7406\u4E2D"
+        };
+      }
+    },
+    // ========== 异步视频生成接口：查询结果 ==========
+    "/generations/async/:taskId": async (request2) => {
+      const { taskId } = request2.params;
+      if (!taskId) {
+        throw new Error("\u7F3A\u5C11 task_id \u53C2\u6570");
+      }
+      const task = await queryAsyncVideoTask(taskId);
+      if (task.status === "succeeded") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "succeeded",
+          data: [{
+            url: task.result.url,
+            revised_prompt: task.result.revised_prompt
+          }]
+        };
+      } else if (task.status === "failed") {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: "failed",
+          error: task.error
+        };
+      } else {
+        return {
+          created: util_default.unixTimestamp(),
+          task_id: task.taskId,
+          status: task.status,
+          message: "\u4EFB\u52A1\u5904\u7406\u4E2D"
+        };
+      }
     }
   }
 };
@@ -6091,6 +8309,146 @@ var video_default = {
   ...videos_default,
   prefix: "/v1/video"
 };
+
+// src/lib/job-store.ts
+import { v1 as uuid2 } from "uuid";
+
+// src/lib/db.ts
+import { Pool as Pool2 } from "pg";
+var pool = new Pool2({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+  idleTimeoutMillis: 1e4,
+  connectionTimeoutMillis: 5e3,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 1e4
+});
+pool.on("error", (err) => {
+  logger_default.error(`DB: pool error: ${err.message}`);
+});
+async function updateJobInDb(id, update) {
+  const now = Math.floor(Date.now() / 1e3);
+  const keys = Object.keys(update);
+  if (keys.length === 0) return;
+  const setClauses = keys.map((key, i) => `${key} = $${i + 2}`).join(", ");
+  const values = Object.values(update);
+  try {
+    await pool.query(
+      `UPDATE video_jobs SET ${setClauses}, updated_at = $1 WHERE id = $${values.length + 2}`,
+      [now, ...values, id]
+    );
+  } catch (err) {
+    logger_default.error(`DB: updateJobInDb failed for ${id}: ${err.message}`);
+  }
+}
+var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function getJobFromDb(id) {
+  if (!UUID_REGEX.test(id)) return null;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs WHERE id = $1`,
+      [id]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    logger_default.error(`DB: getJobFromDb failed for ${id}: ${err.message}`);
+    return null;
+  }
+}
+async function getStuckJobsWithoutHistoryId(olderThanSeconds = 600) {
+  const cutoff = Math.floor(Date.now() / 1e3) - olderThanSeconds;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NULL
+               AND created_at < $1
+             ORDER BY created_at ASC`,
+      [cutoff]
+    );
+    return result.rows;
+  } catch (err) {
+    logger_default.error(`DB: getStuckJobsWithoutHistoryId failed: ${err.message}`);
+    return [];
+  }
+}
+async function getProcessingJobsWithHistoryId() {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM video_jobs
+             WHERE (status = 'processing' OR status = 'pending')
+               AND jimeng_history_id IS NOT NULL
+             ORDER BY created_at ASC`
+    );
+    return result.rows;
+  } catch (err) {
+    logger_default.error(`DB: getProcessingJobsWithHistoryId failed: ${err.message}`);
+    return [];
+  }
+}
+
+// src/lib/job-store.ts
+var jobs = /* @__PURE__ */ new Map();
+var JOB_TTL_SECONDS = 24 * 60 * 60;
+var CLEANUP_INTERVAL_MS = 60 * 60 * 1e3;
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1e3);
+  let removed = 0;
+  for (const [id, job] of jobs.entries()) {
+    if (now - job.updated > JOB_TTL_SECONDS) {
+      jobs.delete(id);
+      removed++;
+    }
+  }
+  if (removed > 0)
+    logger_default.info(`JobStore: cleaned up ${removed} expired jobs`);
+}, CLEANUP_INTERVAL_MS);
+function dbJobToJob(dbJob) {
+  const job = {
+    id: dbJob.id,
+    status: dbJob.status,
+    created: dbJob.created_at,
+    updated: dbJob.updated_at
+  };
+  if (dbJob.error_message) {
+    job.error = dbJob.error_message;
+  }
+  if (dbJob.result_url || dbJob.result_b64_json) {
+    job.result = {
+      url: dbJob.result_url || void 0,
+      b64_json: dbJob.result_b64_json || void 0,
+      revised_prompt: dbJob.result_revised_prompt || void 0
+    };
+  }
+  return job;
+}
+function updateJob(id, update) {
+  var _a, _b, _c;
+  const job = jobs.get(id);
+  if (job) {
+    Object.assign(job, update, { updated: Math.floor(Date.now() / 1e3) });
+  }
+  const dbUpdate = {};
+  if (update.status) dbUpdate.status = update.status;
+  if (update.error) dbUpdate.error_message = update.error;
+  if ((_a = update.result) == null ? void 0 : _a.url) dbUpdate.result_url = update.result.url;
+  if ((_b = update.result) == null ? void 0 : _b.b64_json) dbUpdate.result_b64_json = update.result.b64_json;
+  if ((_c = update.result) == null ? void 0 : _c.revised_prompt) dbUpdate.result_revised_prompt = update.result.revised_prompt;
+  if (Object.keys(dbUpdate).length > 0) {
+    updateJobInDb(id, dbUpdate).catch(
+      (err) => logger_default.error(`JobStore: failed to sync update for job ${id} to DB: ${err.message}`)
+    );
+  }
+}
+async function getJob(id) {
+  const inMemory = jobs.get(id);
+  if (inMemory) return inMemory;
+  const dbJob = await getJobFromDb(id);
+  if (!dbJob) return void 0;
+  const job = dbJobToJob(dbJob);
+  jobs.set(id, job);
+  return job;
+}
 
 // src/api/routes/video-jobs.ts
 var video_jobs_default = {
@@ -6138,7 +8496,7 @@ var routes_default = [
   {
     get: {
       "/": async () => {
-        const content = await fs9.readFile("public/welcome.html");
+        const content = await fs8.readFile("public/welcome.html");
         return new Response(content, {
           type: "html",
           headers: {
@@ -6253,6 +8611,11 @@ var startupTime = performance.now();
   logger_default.info("Process id:", process.pid);
   logger_default.info("Environment:", environment_default.env);
   logger_default.info("Service name:", config_default.service.name);
+  try {
+    await initializeDatabase();
+  } catch (err) {
+    logger_default.warn("Database initialization failed, continuing anyway");
+  }
   server_default.attachRoutes(routes_default);
   await server_default.listen();
   startJobPoller();

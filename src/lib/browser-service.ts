@@ -1,549 +1,287 @@
-import { chromium, Browser, BrowserContext, Page } from "playwright-core";
-import { execSync } from "child_process";
-import fs from "fs";
-import os from "os";
+import { chromium, Browser, BrowserContext, Page, Route } from "playwright-core";
 import logger from "@/lib/logger.ts";
-import { getCookiesForBrowser } from "@/api/controllers/core.ts";
+import { getCookiesForBrowser, getCookiesForBrowserInternational } from "@/api/controllers/core.ts";
 
-let cachedChromiumPath: string | null = null;
-
-function findChromiumPath(): string {
-  if (cachedChromiumPath) {
-    return cachedChromiumPath;
-  }
-
-  if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) {
-    cachedChromiumPath = process.env.CHROMIUM_PATH;
-    return cachedChromiumPath;
-  }
-
-  try {
-    const playwrightPath = chromium.executablePath();
-    if (playwrightPath && fs.existsSync(playwrightPath)) {
-      logger.info(`BrowserService: using Playwright built-in Chromium: ${playwrightPath}`);
-      cachedChromiumPath = playwrightPath;
-      return cachedChromiumPath;
-    }
-  } catch {}
-
-  try {
-    const whichPath = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null", { encoding: "utf-8" }).trim();
-    if (whichPath && fs.existsSync(whichPath)) {
-      cachedChromiumPath = whichPath;
-      return cachedChromiumPath;
-    }
-  } catch {}
-
-  try {
-    const nixChrome = execSync("find /nix/store -maxdepth 3 -name 'chromium' -type f -executable 2>/dev/null | grep '/bin/chromium' | head -1", { encoding: "utf-8", timeout: 5000 }).trim();
-    if (nixChrome && fs.existsSync(nixChrome)) {
-      cachedChromiumPath = nixChrome;
-      return cachedChromiumPath;
-    }
-  } catch {}
-
-  const fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"];
-  for (const p of fallbacks) {
-    if (fs.existsSync(p)) {
-      cachedChromiumPath = p;
-      return cachedChromiumPath;
-    }
-  }
-  return "";
-}
-
-let trackedBrowserPid: number | null = null;
-
-function killTrackedBrowserProcess(): void {
-  if (!trackedBrowserPid) return;
-  try {
-    execSync(`kill -9 ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
-    execSync(`pkill -9 -P ${trackedBrowserPid} 2>/dev/null || true`, { encoding: "utf-8", timeout: 5000 });
-    logger.info(`BrowserService: killed stale browser process (pid: ${trackedBrowserPid})`);
-  } catch {}
-  trackedBrowserPid = null;
-}
-
-function getSystemMemoryInfo(): { totalMB: number; freeMB: number; usedPercent: number } {
-  const totalMB = Math.round(os.totalmem() / 1024 / 1024);
-  const freeMB = Math.round(os.freemem() / 1024 / 1024);
-  const usedPercent = Math.round(((totalMB - freeMB) / totalMB) * 100);
-  return { totalMB, freeMB, usedPercent };
-}
-
+// bdms SDK 相关脚本的白名单域名
 const SCRIPT_WHITELIST_DOMAINS = [
   "vlabstatic.com",
   "bytescm.com",
   "jianying.com",
   "byteimg.com",
+  "capcutstatic.com",
+  "capcut.com",
+  "bytegecko.com",
+  "bytedance.com",
+  "bytegoofy.com",
+  "ttwstatic.com",
 ];
 
+// 需要屏蔽的资源类型（加速加载、减少内存）
 const BLOCKED_RESOURCE_TYPES = ["image", "font", "stylesheet", "media"];
 
-const SESSION_IDLE_TIMEOUT = 5 * 60 * 1000;
+// 会话空闲超时时间（毫秒）
+const SESSION_IDLE_TIMEOUT = 10 * 60 * 1000;
+
+// bdms SDK 就绪等待超时（毫秒）
 const BDMS_READY_TIMEOUT = 30000;
-const BROWSER_LAUNCH_TIMEOUT = 120000;
-const MAX_SESSIONS = 2;
-const HEALTH_CHECK_INTERVAL = 30 * 1000;
-const FETCH_TIMEOUT = 30000;
-const PROACTIVE_RECONNECT_DELAY = 2000;
 
-const API_CIRCUIT_BREAKER_THRESHOLD = 3;
-const API_CIRCUIT_BREAKER_COOLDOWN = 20 * 1000;
-
-const BROWSER_CIRCUIT_BREAKER_THRESHOLD = 3;
-const BROWSER_CIRCUIT_BREAKER_COOLDOWN = 30 * 1000;
-
-const RECYCLE_AFTER_N_JOBS = parseInt(process.env.BROWSER_RECYCLE_AFTER_JOBS || "5", 10);
-const RECYCLE_DELAY_MS = 5000;
+// 国际版 API 域名映射（前端域名 → 实际 API 域名）
+const INTERNATIONAL_API_HOST_MAP: Record<string, string> = {
+  "dreamina.capcut.com": "mweb-api-sg.capcut.com",
+  "dreamina.us.capcut.com": "dreamina-api.us.capcut.com",
+};
 
 interface BrowserSession {
   context: BrowserContext;
   page: Page;
   lastUsed: number;
   idleTimer: NodeJS.Timeout | null;
-}
-
-interface CancelToken {
-  cancelled: boolean;
+  region?: "cn" | "international"; // 区域标识
 }
 
 class BrowserService {
   private browser: Browser | null = null;
   private sessions: Map<string, BrowserSession> = new Map();
   private launching: Promise<Browser> | null = null;
-  private healthCheckTimer: NodeJS.Timeout | null = null;
 
-  private apiConsecutiveFailures: number = 0;
-  private apiLastFailureTime: number = 0;
-
-  private browserConsecutiveFailures: number = 0;
-  private browserLastFailureTime: number = 0;
-
-  private browserStartCount: number = 0;
-  private browserStartTime: number = 0;
-
-  private jobsCompletedCount: number = 0;
-  private recycleScheduled: boolean = false;
-
-  private isReady(): boolean {
-    return this.browser !== null && this.browser.isConnected();
-  }
-
-  private isApiCircuitOpen(): boolean {
-    if (this.apiConsecutiveFailures < API_CIRCUIT_BREAKER_THRESHOLD) {
-      return false;
-    }
-    const elapsed = Date.now() - this.apiLastFailureTime;
-    if (elapsed > API_CIRCUIT_BREAKER_COOLDOWN) {
-      logger.info(`BrowserService: API circuit breaker cooled (${Math.round(elapsed / 1000)}s), allowing retry`);
-      this.apiConsecutiveFailures = 0;
-      return false;
-    }
-    return true;
-  }
-
-  private isBrowserCircuitOpen(): boolean {
-    if (this.browserConsecutiveFailures < BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      return false;
-    }
-    const elapsed = Date.now() - this.browserLastFailureTime;
-    if (elapsed > BROWSER_CIRCUIT_BREAKER_COOLDOWN) {
-      logger.info(`BrowserService: browser circuit breaker cooled (${Math.round(elapsed / 1000)}s), allowing retry`);
-      this.browserConsecutiveFailures = 0;
-      return false;
-    }
-    return true;
-  }
-
-  private recordApiFailure(): void {
-    this.apiConsecutiveFailures++;
-    this.apiLastFailureTime = Date.now();
-    logger.warn(`BrowserService: API consecutive failures: ${this.apiConsecutiveFailures}/${API_CIRCUIT_BREAKER_THRESHOLD}`);
-    if (this.apiConsecutiveFailures >= API_CIRCUIT_BREAKER_THRESHOLD) {
-      logger.warn(`BrowserService: API circuit breaker OPEN, cooling for ${API_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
-      this.scheduleApiRecovery();
-    }
-  }
-
-  private recordApiSuccess(): void {
-    if (this.apiConsecutiveFailures > 0) {
-      logger.info(`BrowserService: API recovered, circuit breaker reset (was ${this.apiConsecutiveFailures} consecutive failures)`);
-    }
-    this.apiConsecutiveFailures = 0;
-  }
-
-  private recordBrowserFailure(): void {
-    this.browserConsecutiveFailures++;
-    this.browserLastFailureTime = Date.now();
-    logger.warn(`BrowserService: browser consecutive failures: ${this.browserConsecutiveFailures}/${BROWSER_CIRCUIT_BREAKER_THRESHOLD}`);
-    if (this.browserConsecutiveFailures >= BROWSER_CIRCUIT_BREAKER_THRESHOLD) {
-      logger.warn(`BrowserService: browser circuit breaker OPEN, cooling for ${BROWSER_CIRCUIT_BREAKER_COOLDOWN / 1000}s`);
-      this.scheduleBrowserRecovery();
-    }
-  }
-
-  private recordBrowserSuccess(): void {
-    if (this.browserConsecutiveFailures > 0) {
-      logger.info(`BrowserService: browser recovered, circuit breaker reset (was ${this.browserConsecutiveFailures} consecutive failures)`);
-    }
-    this.browserConsecutiveFailures = 0;
-  }
-
-  private scheduleApiRecovery(): void {
-    setTimeout(() => {
-      logger.info(`BrowserService: API circuit breaker cooldown ended, counter reset`);
-      this.apiConsecutiveFailures = 0;
-    }, API_CIRCUIT_BREAKER_COOLDOWN + 1000);
-  }
-
-  private scheduleBrowserRecovery(): void {
-    setTimeout(() => {
-      if (this.isReady() || this.launching) {
-        logger.info(`BrowserService: browser circuit breaker recovery check: browser ready, no reconnect needed`);
-        return;
-      }
-      logger.info(`BrowserService: browser circuit breaker cooldown ended, attempting recovery...`);
-      this.browserConsecutiveFailures = 0;
-      this.ensureBrowser().then(() => {
-        logger.info(`BrowserService: browser circuit breaker recovered successfully`);
-      }).catch((err) => {
-        logger.error(`BrowserService: browser circuit breaker recovery failed: ${(err as Error).message}`);
-      });
-    }, BROWSER_CIRCUIT_BREAKER_COOLDOWN + 1000);
-  }
-
-  private proactiveReconnect(): void {
-    if (this.launching || this.isBrowserCircuitOpen()) {
-      return;
-    }
-
-    logger.info(`BrowserService: scheduling proactive reconnect (in ${PROACTIVE_RECONNECT_DELAY}ms)...`);
-    setTimeout(() => {
-      if (this.isReady() || this.launching || this.isBrowserCircuitOpen()) {
-        return;
-      }
-      logger.info(`BrowserService: executing proactive background reconnect...`);
-      this.ensureBrowser().then(() => {
-        logger.info(`BrowserService: proactive reconnect succeeded`);
-      }).catch((err) => {
-        logger.error(`BrowserService: proactive reconnect failed: ${(err as Error).message}`);
-      });
-    }, PROACTIVE_RECONNECT_DELAY);
-  }
-
+  /**
+   * 懒启动浏览器实例
+   */
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser?.isConnected()) {
       return this.browser;
     }
 
-    if (this.isBrowserCircuitOpen()) {
-      const remaining = Math.round((BROWSER_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.browserLastFailureTime)) / 1000);
-      throw new Error(`BrowserService: browser temporarily unavailable, retry in ${remaining}s`);
-    }
-
+    // 防止并发启动
     if (this.launching) {
       return this.launching;
     }
 
     this.launching = (async () => {
-      const chromiumPath = findChromiumPath();
-      const memInfo = getSystemMemoryInfo();
-      logger.info(`BrowserService: launching Chromium... (path: ${chromiumPath || "default"}, memory: ${memInfo.freeMB}MB free / ${memInfo.totalMB}MB total, ${memInfo.usedPercent}% used)`);
+      logger.info("BrowserService: 正在启动 Chromium 浏览器...");
+      try {
+        this.browser = await chromium.launch({
+          headless: true,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-zygote",
+            "--single-process",
+          ],
+        });
 
-      if (memInfo.freeMB < 200) {
-        logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, cleaning up before launch...`);
-        killTrackedBrowserProcess();
-        await new Promise(r => setTimeout(r, 2000));
+        this.browser.on("disconnected", () => {
+          logger.warn("BrowserService: 浏览器已断开连接");
+          this.browser = null;
+          this.sessions.clear();
+        });
+
+        logger.info("BrowserService: Chromium 浏览器启动成功");
+        return this.browser;
+      } finally {
+        this.launching = null;
       }
-
-      const maxAttempts = 3;
-      let lastError: Error | null = null;
-
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          if (attempt > 1) {
-            logger.info(`BrowserService: cleaning up stale processes before retry... (attempt ${attempt})`);
-            killTrackedBrowserProcess();
-            await new Promise(r => setTimeout(r, 3000));
-          }
-
-          const launchOptions: any = {
-            headless: true,
-            timeout: BROWSER_LAUNCH_TIMEOUT,
-            args: [
-              "--no-sandbox",
-              "--disable-setuid-sandbox",
-              "--disable-dev-shm-usage",
-              "--disable-gpu",
-              "--no-first-run",
-              "--disable-extensions",
-              "--disable-background-networking",
-              "--disable-sync",
-              "--disable-translate",
-              "--metrics-recording-only",
-              "--mute-audio",
-              "--no-default-browser-check",
-              "--js-flags=--max-old-space-size=128",
-              "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-              "--disable-hang-monitor",
-              "--disable-popup-blocking",
-              "--disable-prompt-on-repost",
-              "--disable-renderer-backgrounding",
-              "--disable-component-update",
-              "--disable-domain-reliability",
-              "--disable-client-side-phishing-detection",
-              "--disable-breakpad",
-              "--disable-software-rasterizer",
-              "--enable-low-end-device-mode",
-              "--disable-canvas-aa",
-              "--disable-2d-canvas-clip-aa",
-            ],
-          };
-          if (chromiumPath) {
-            launchOptions.executablePath = chromiumPath;
-          }
-          this.browser = await chromium.launch(launchOptions);
-
-          try {
-            const serverProcess = (this.browser as any)._browserProcess || (this.browser as any)._process;
-            if (serverProcess?.pid) {
-              trackedBrowserPid = serverProcess.pid;
-              logger.info(`BrowserService: browser process PID: ${trackedBrowserPid}`);
-            }
-          } catch {}
-
-          this.browser.on("disconnected", () => {
-            const uptime = this.browserStartTime ? Math.round((Date.now() - this.browserStartTime) / 1000) : 0;
-            logger.warn(`BrowserService: browser disconnected (uptime: ${uptime}s, active sessions: ${this.sessions.size})`);
-            this.browser = null;
-            this.sessions.clear();
-            trackedBrowserPid = null;
-            this.proactiveReconnect();
-          });
-
-          this.browserStartCount++;
-          this.browserStartTime = Date.now();
-          const memAfter = getSystemMemoryInfo();
-          logger.info(`BrowserService: Chromium launched successfully (attempt ${attempt}, start #${this.browserStartCount}, memory after: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used)`);
-
-          this.recordBrowserSuccess();
-          this.startHealthCheck();
-
-          return this.browser;
-        } catch (err) {
-          lastError = err as Error;
-          const memErr = getSystemMemoryInfo();
-          logger.error(`BrowserService: launch failed (attempt ${attempt}/${maxAttempts}): ${lastError.message} (memory: ${memErr.freeMB}MB free, ${memErr.usedPercent}% used)`);
-          if (attempt < maxAttempts) {
-            const backoffMs = 5000 * attempt;
-            logger.info(`BrowserService: retrying in ${backoffMs / 1000}s...`);
-            await new Promise(r => setTimeout(r, backoffMs));
-          }
-        }
-      }
-
-      this.recordBrowserFailure();
-      throw lastError || new Error("browser launch failed");
-    })().finally(() => {
-      this.launching = null;
-    });
+    })();
 
     return this.launching;
   }
 
-  private startHealthCheck(): void {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-    }
-
-    this.healthCheckTimer = setInterval(async () => {
-      try {
-        if (!this.browser?.isConnected()) {
-          logger.warn("BrowserService: health check: browser disconnected, triggering reconnect...");
-          this.browser = null;
-          this.sessions.clear();
-          this.stopHealthCheck();
-          this.proactiveReconnect();
-          return;
-        }
-
-        const memInfo = getSystemMemoryInfo();
-        if (memInfo.freeMB < 200 && this.sessions.size > 0) {
-          const evictCount = memInfo.freeMB < 100 ? this.sessions.size : 1;
-          logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB free), evicting ${evictCount} session(s)...`);
-          await this.evictOldestSessions(evictCount);
-        }
-
-        const now = Date.now();
-        for (const [token, session] of this.sessions) {
-          if (now - session.lastUsed > SESSION_IDLE_TIMEOUT) {
-            logger.info(`BrowserService: health check: closing idle session ${token.substring(0, 8)}...`);
-            await this.closeSession(token);
-          }
-        }
-      } catch (err) {
-        logger.error(`BrowserService: health check error: ${(err as Error).message}`);
-      }
-    }, HEALTH_CHECK_INTERVAL);
-
-    if (this.healthCheckTimer.unref) {
-      this.healthCheckTimer.unref();
-    }
-  }
-
-  private stopHealthCheck(): void {
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-      this.healthCheckTimer = null;
-    }
-  }
-
-  private async evictOldestSessions(count: number): Promise<void> {
-    const sorted = [...this.sessions.entries()].sort(
-      (a, b) => a[1].lastUsed - b[1].lastUsed
-    );
-    for (let i = 0; i < Math.min(count, sorted.length); i++) {
-      const [token] = sorted[i];
-      logger.info(`BrowserService: evicting oldest session ${token.substring(0, 8)}...`);
-      await this.closeSession(token);
-    }
-  }
-
-  private async getSession(token: string): Promise<BrowserSession> {
-    const existing = this.sessions.get(token);
+  /**
+   * 获取或创建指定 token 的浏览器会话
+   * @param token raw sessionid (不含前缀)
+   * @param region "cn" 或 "international"
+   */
+  async getSession(token: string, region: "cn" | "international" = "cn"): Promise<BrowserSession> {
+    const sessionKey = `${region}:${token}`;
+    const existing = this.sessions.get(sessionKey);
     if (existing) {
-      try {
-        if (!existing.page.isClosed()) {
-          existing.lastUsed = Date.now();
-          if (existing.idleTimer) {
-            clearTimeout(existing.idleTimer);
-          }
-          existing.idleTimer = setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT);
-          return existing;
-        }
-      } catch {}
-      logger.info(`BrowserService: session ${token.substring(0, 8)}... is stale, recreating`);
-      this.sessions.delete(token);
-      if (existing.idleTimer) clearTimeout(existing.idleTimer);
-    }
-
-    if (this.sessions.size >= MAX_SESSIONS) {
-      logger.warn(`BrowserService: session limit reached (${MAX_SESSIONS}), evicting oldest...`);
-      await this.evictOldestSessions(1);
-    }
-
-    return this.createSession(token);
-  }
-
-  private async createSession(token: string): Promise<BrowserSession> {
-    const maxAttempts = 2;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const browser = await this.ensureBrowser();
-
-        const memInfo = getSystemMemoryInfo();
-        logger.info(`BrowserService: creating session for token ${token.substring(0, 8)}... (attempt ${attempt}, memory: ${memInfo.freeMB}MB free)`);
-
-        if (memInfo.freeMB < 150 && this.sessions.size > 0) {
-          logger.warn(`BrowserService: low memory (${memInfo.freeMB}MB) free, progressively evicting sessions...`);
-          while (this.sessions.size > 0) {
-            await this.evictOldestSessions(1);
-            const updated = getSystemMemoryInfo();
-            if (updated.freeMB >= 150) break;
-          }
-          await new Promise(r => setTimeout(r, 1000));
-        }
-
-        const context = await browser.newContext({
-          userAgent:
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
-          viewport: { width: 1280, height: 720 },
-          locale: "zh-CN",
-        });
-
-        const cookies = getCookiesForBrowser(token);
-        await context.addCookies(cookies);
-
-        await context.route("**/*", (route) => {
-          const request = route.request();
-          const resourceType = request.resourceType();
-          const url = request.url();
-
-          if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
-            return route.abort();
-          }
-
-          if (resourceType === "script") {
-            const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some((domain) =>
-              url.includes(domain)
-            );
-            if (!isWhitelisted) {
-              return route.abort();
-            }
-          }
-
-          return route.continue();
-        });
-
-        const page = await context.newPage();
-
-        logger.info("BrowserService: navigating to jimeng.jianying.com...");
-        await page.goto("https://jimeng.jianying.com", {
-          waitUntil: "domcontentloaded",
-          timeout: 45000,
-        });
-
-        logger.info("BrowserService: waiting for bdms SDK...");
-        try {
-          await page.waitForFunction(
-            () => {
-              return (
-                (window as any).bdms?.init ||
-                (window as any).byted_acrawler ||
-                window.fetch.toString().indexOf("native code") === -1
-              );
-            },
-            { timeout: BDMS_READY_TIMEOUT }
-          );
-          logger.info("BrowserService: bdms SDK is ready");
-        } catch (err) {
-          logger.warn(
-            "BrowserService: bdms SDK wait timed out, may not be fully loaded, continuing..."
-          );
-        }
-
-        const session: BrowserSession = {
-          context,
-          page,
-          lastUsed: Date.now(),
-          idleTimer: setTimeout(() => this.closeSession(token), SESSION_IDLE_TIMEOUT),
-        };
-
-        this.sessions.set(token, session);
-        return session;
-      } catch (err) {
-        logger.error(`BrowserService: session creation failed (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
-        this.browser = null;
-        this.sessions.clear();
-        if (attempt >= maxAttempts) {
-          this.recordBrowserFailure();
-          throw err;
-        }
-        await new Promise(r => setTimeout(r, 3000));
+      existing.lastUsed = Date.now();
+      // 重置空闲计时器
+      if (existing.idleTimer) {
+        clearTimeout(existing.idleTimer);
       }
+      existing.idleTimer = setTimeout(() => this.closeSession(sessionKey), SESSION_IDLE_TIMEOUT);
+      return existing;
     }
 
-    this.recordBrowserFailure();
-    throw new Error("session creation failed");
+    return this.createSession(token, region);
   }
 
+  /**
+   * 国际版 API 请求路由重写
+   * 浏览器页面在 dreamina.capcut.com，但 API 在 mweb-api-sg.capcut.com
+   * secsdk 要求同源才能正确签名，所以将同源请求代理转发到实际 API
+   */
+  private async setupInternationalApiRoute(page: Page) {
+    await page.route("**/mweb/**", async (route: Route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+
+      // 查找对应的实际 API 域名
+      const apiHost = INTERNATIONAL_API_HOST_MAP[url.hostname];
+      if (!apiHost) {
+        return route.continue();
+      }
+
+      // 重写 URL 为实际 API 域名
+      const targetUrl = `${url.protocol}//${apiHost}${url.pathname}${url.search}`;
+      logger.info(`BrowserService: API 路由重写 ${request.url().substring(0, 80)} → ${targetUrl.substring(0, 80)}`);
+      // 调试: 打印完整的 URL 查询参数和请求头
+      logger.info(`BrowserService: [DEBUG] 完整URL: ${request.url()}`);
+      const headers = request.headers();
+      const headerKeys = Object.keys(headers).filter(k => !['accept', 'accept-language', 'user-agent', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'origin', 'referer'].includes(k));
+      logger.info(`BrowserService: [DEBUG] 特殊请求头: ${JSON.stringify(headerKeys.reduce((acc, k) => ({ ...acc, [k]: headers[k] }), {}))}`);
+      logger.info(`BrowserService: [DEBUG] 查询参数: ${url.search}`);
+
+      try {
+        const response = await route.fetch({ url: targetUrl });
+        await route.fulfill({ response });
+      } catch (err) {
+        logger.error(`BrowserService: API 路由重写失败: ${(err as Error).message}`);
+        await route.abort();
+      }
+    });
+  }
+
+  /**
+   * 创建新的浏览器会话
+   */
+  private async createSession(token: string, region: "cn" | "international" = "cn"): Promise<BrowserSession> {
+    const browser = await this.ensureBrowser();
+    const sessionKey = `${region}:${token}`;
+
+    logger.info(`BrowserService: 为 token ${token.substring(0, 8)}... (${region}) 创建新会话`);
+
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+      viewport: { width: 1920, height: 1080 },
+      locale: region === "international" ? "en-US" : "zh-CN",
+    });
+
+    if (region === "international") {
+      await context.setExtraHTTPHeaders({
+        "x-requested-with": "XMLHttpRequest",
+        "loc": "en",
+      });
+    }
+
+    // 注入 cookies（根据区域使用不同域名和 cookies）
+    const cookies = region === "international"
+      ? getCookiesForBrowserInternational(token)
+      : getCookiesForBrowser(token);
+    await context.addCookies(cookies);
+
+    // 配置资源拦截
+    await context.route("**/*", (route) => {
+      const request = route.request();
+      const resourceType = request.resourceType();
+      const url = request.url();
+
+      // 屏蔽不需要的资源类型
+      if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
+        return route.abort();
+      }
+
+      // 对于脚本资源，只允许白名单域名
+      if (resourceType === "script") {
+        const isWhitelisted = SCRIPT_WHITELIST_DOMAINS.some((domain) =>
+          url.includes(domain)
+        );
+        if (!isWhitelisted) {
+          logger.info(`BrowserService: [SCRIPT] 屏蔽脚本: ${url.substring(0, 150)}`);
+          return route.abort();
+        }
+      }
+
+      return route.continue();
+    });
+
+    const page = await context.newPage();
+
+    // 国际版：设置 API 路由重写（必须在 context route 之后注册，page route 优先）
+    if (region === "international") {
+      await this.setupInternationalApiRoute(page);
+    }
+
+    // 根据区域导航到不同页面，让 bdms SDK 加载
+    const navUrl = region === "international"
+      ? "https://dreamina.capcut.com/ai-tool/video/generate"
+      : "https://jimeng.jianying.com/ai-tool/video/generate";
+    logger.info(`BrowserService: 正在导航到 ${navUrl} ...`);
+    await page.goto(navUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    // 等待安全 SDK 就绪
+    const sdkName = region === "international" ? "secsdk" : "bdms";
+    logger.info(`BrowserService: 等待 ${sdkName} SDK 就绪...`);
+    try {
+      if (region === "international") {
+        // 国际版使用 secsdk（会注入签名到 fetch 请求头）
+        await page.waitForFunction(
+          () => {
+            // secsdk 会在 window 上挂载 __secsdk 或替换 fetch
+            return (
+              (window as any).__secsdk ||
+              (window as any).__ac_nonce ||
+              (window as any).byted_acrawler ||
+              // secsdk 会修改 fetch，注入签名 headers
+              window.fetch.toString().indexOf("native code") === -1
+            );
+          },
+          { timeout: BDMS_READY_TIMEOUT }
+        );
+        // 国际版额外等待并触发页面交互，确保 secsdk 完全激活
+        logger.info(`BrowserService: secsdk 检测到，触发页面交互以激活签名...`);
+        // 模拟用户交互，触发 secsdk 初始化
+        await page.mouse.move(100, 100);
+        await page.mouse.click(100, 100);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } else {
+        // 国内版使用 bdms SDK
+        await page.waitForFunction(
+          () => {
+            return (
+              (window as any).bdms?.init ||
+              (window as any).byted_acrawler ||
+              window.fetch.toString().indexOf("native code") === -1
+            );
+          },
+          { timeout: BDMS_READY_TIMEOUT }
+        );
+      }
+      logger.info(`BrowserService: ${sdkName} SDK 已就绪`);
+    } catch (err) {
+      logger.warn(
+        `BrowserService: ${sdkName} SDK 等待超时，可能未完全加载，继续尝试...`
+      );
+    }
+
+    const session: BrowserSession = {
+      context,
+      page,
+      lastUsed: Date.now(),
+      idleTimer: setTimeout(() => this.closeSession(sessionKey), SESSION_IDLE_TIMEOUT),
+      region,
+    };
+
+    this.sessions.set(sessionKey, session);
+    return session;
+  }
+
+  /**
+   * 关闭指定 token 的会话
+   */
   private async closeSession(token: string) {
     const session = this.sessions.get(token);
     if (!session) return;
 
-    logger.info(`BrowserService: closing idle session ${token.substring(0, 8)}...`);
+    logger.info(`BrowserService: 关闭空闲会话 ${token.substring(0, 8)}...`);
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
     }
@@ -551,202 +289,110 @@ class BrowserService {
     try {
       await session.context.close();
     } catch (err) {
+      // 忽略关闭错误
     }
 
     this.sessions.delete(token);
   }
 
+  /**
+   * 将国际版 API URL 转为同源的页面 URL（用于 page.evaluate 中的 fetch）
+   * 例如 mweb-api-sg.capcut.com/xxx → dreamina.capcut.com/xxx
+   */
+  private rewriteInternationalUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      for (const [pageHost, apiHost] of Object.entries(INTERNATIONAL_API_HOST_MAP)) {
+        if (parsed.hostname === apiHost) {
+          return `${parsed.protocol}//${pageHost}${parsed.pathname}${parsed.search}`;
+        }
+      }
+    } catch {}
+    return url;
+  }
+
+  /**
+   * 通过浏览器代理发送 fetch 请求
+   * bdms/secsdk SDK 会自动拦截 fetch 并注入 a_bogus 签名
+   *
+   * @param token sessionid（raw，不含前缀）
+   * @param url 完整的请求 URL
+   * @param options fetch 选项 (method, headers, body)
+   * @param region 区域: "cn" 或 "international"
+   * @returns 解析后的 JSON 响应
+   */
   async fetch(
     token: string,
     url: string,
-    options: { method?: string; headers?: Record<string, string>; body?: string }
-  ): Promise<any> {
-    if (this.isApiCircuitOpen()) {
-      const remaining = Math.round((API_CIRCUIT_BREAKER_COOLDOWN - (Date.now() - this.apiLastFailureTime)) / 1000);
-      const error: any = new Error(`BrowserService: requests temporarily unavailable, retry in ${remaining}s`);
-      error.statusCode = 503;
-      error.retryAfter = remaining;
-      throw error;
-    }
-
-    const totalStart = Date.now();
-
-    let session: BrowserSession;
-    try {
-      logger.info(`BrowserService: acquiring session...`);
-      session = await this.getSession(token);
-      const sessionElapsed = Date.now() - totalStart;
-      logger.info(`BrowserService: session ready (${sessionElapsed}ms)`);
-    } catch (err) {
-      const elapsed = Date.now() - totalStart;
-      logger.error(`BrowserService: session acquisition failed (${elapsed}ms): ${(err as Error).message}`);
-      const error: any = new Error(`BrowserService: session acquisition failed: ${(err as Error).message}`);
-      error.statusCode = 503;
-      error.retryAfter = 10;
-      throw error;
-    }
-
-    const fetchStart = Date.now();
-    let timedOut = false;
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    const cancelToken: CancelToken = { cancelled: false };
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        cancelToken.cancelled = true;
-        reject(new Error(`BrowserService: request timed out (${FETCH_TIMEOUT / 1000}s)`));
-      }, FETCH_TIMEOUT);
-    });
-
-    try {
-      const resultPromise = this._doFetch(token, session, url, options, cancelToken);
-      const result = await Promise.race([resultPromise, timeoutPromise]);
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      const elapsed = Date.now() - fetchStart;
-      const totalElapsed = Date.now() - totalStart;
-      logger.info(`BrowserService: request completed (fetch: ${elapsed}ms, total: ${totalElapsed}ms)`);
-      this.recordApiSuccess();
-      return result;
-    } catch (err) {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      const elapsed = Date.now() - fetchStart;
-      const totalElapsed = Date.now() - totalStart;
-      logger.error(`BrowserService: request failed (fetch: ${elapsed}ms, total: ${totalElapsed}ms): ${(err as Error).message}`);
-
-      if (timedOut) {
-        logger.warn(`BrowserService: timed out, closing session ${token.substring(0, 8)}...`);
-        this.closeSession(token).catch(() => {});
-      }
-
-      this.recordApiFailure();
-
-      if (timedOut) {
-        const error: any = new Error((err as Error).message);
-        error.statusCode = 503;
-        error.retryAfter = 10;
-        throw error;
-      }
-
-      throw err;
-    }
-  }
-
-  private async _doFetch(
-    token: string,
-    session: BrowserSession,
-    url: string,
     options: { method?: string; headers?: Record<string, string>; body?: string },
-    cancelToken: CancelToken
+    region: "cn" | "international" = "cn"
   ): Promise<any> {
-    if (cancelToken.cancelled) {
-      logger.warn(`BrowserService: request cancelled, skipping (already timed out)`);
-      throw new Error("BrowserService: request was cancelled");
-    }
+    const sessionToken = region === "international" && /^[a-z]{2}-/i.test(token)
+      ? token.substring(3)
+      : token;
+    const session = await this.getSession(sessionToken, region);
 
-    logger.info(`BrowserService: proxying ${options.method || "GET"} ${url.substring(0, 100)}...`);
+    // 国际版：将 API URL 转为同源 URL，secsdk 需要同源上下文才能正确签名
+    const fetchUrl = region === "international" ? this.rewriteInternationalUrl(url) : url;
+
+    logger.info(`BrowserService: 代理请求 ${options.method || "GET"} ${fetchUrl.substring(0, 100)}...`);
 
     try {
       const result = await session.page.evaluate(
-        async ({ url, options, timeoutMs }) => {
+        async ({ url, options }) => {
           try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const res = await fetch(url, {
+            // 确保在页面上下文中执行，让 secsdk 有机会拦截并注入签名
+            const res = await window.fetch(url, {
               method: options.method || "GET",
               headers: {
                 "Content-Type": "application/json",
+                "x-requested-with": "XMLHttpRequest",
                 ...(options.headers || {}),
               },
               body: options.body,
               credentials: "include",
-              signal: controller.signal,
             });
-            clearTimeout(timeoutId);
             const text = await res.text();
-            return { ok: res.ok, status: res.status, text };
+            // 返回请求的完整 URL（包含可能被 secsdk 添加的查询参数）
+            return { ok: res.ok, status: res.status, text, url: res.url };
           } catch (err: any) {
             return { ok: false, status: 0, text: "", error: err.message };
           }
         },
-        { url, options, timeoutMs: FETCH_TIMEOUT - 2000 }
+        { url: fetchUrl, options }
       );
 
-      if (result.error) {
-        throw new Error(`browser fetch error: ${result.error}`);
+      // 记录实际请求的 URL，检查是否包含 X-Bogus 等签名参数
+      if (result.url) {
+        logger.info(`BrowserService: 实际请求 URL: ${result.url.substring(0, 200)}`);
       }
 
-      logger.info(`BrowserService: response status ${result.status}`);
+      if (result.error) {
+        throw new Error(`浏览器 fetch 失败: ${result.error}`);
+      }
+
+      logger.info(`BrowserService: 响应状态 ${result.status}`);
 
       try {
         return JSON.parse(result.text);
       } catch {
-        logger.warn(`BrowserService: response is not valid JSON: ${result.text.substring(0, 200)}`);
+        logger.warn(`BrowserService: 响应不是有效 JSON: ${result.text.substring(0, 200)}`);
         return result.text;
       }
     } catch (err) {
-      logger.error(`BrowserService: request execution failed: ${(err as Error).message}`);
-      await this.closeSession(token);
+      // 如果执行失败（页面崩溃等），清理会话以便下次重建
+      logger.error(`BrowserService: 请求执行失败: ${(err as Error).message}`);
+      const sessionKey = `${region}:${sessionToken}`;
+      await this.closeSession(sessionKey);
       throw err;
     }
   }
 
-  recordJobCompleted(): void {
-    this.jobsCompletedCount++;
-    logger.info(`BrowserService: job completed (${this.jobsCompletedCount}/${RECYCLE_AFTER_N_JOBS} until proactive recycle)`);
-    if (this.jobsCompletedCount >= RECYCLE_AFTER_N_JOBS && !this.recycleScheduled) {
-      this.scheduleRecycle();
-    }
-  }
-
-  private scheduleRecycle(): void {
-    this.recycleScheduled = true;
-    this.jobsCompletedCount = 0;
-    const memBefore = getSystemMemoryInfo();
-    logger.info(`BrowserService: scheduling proactive recycle in ${RECYCLE_DELAY_MS / 1000}s (memory: ${memBefore.freeMB}MB free, ${memBefore.usedPercent}% used)`);
-
-    setTimeout(async () => {
-      try {
-        logger.info(`BrowserService: executing proactive recycle - closing sessions and browser...`);
-        this.stopHealthCheck();
-
-        for (const [token] of this.sessions) {
-          await this.closeSession(token);
-        }
-
-        if (this.browser) {
-          try { await this.browser.close(); } catch {}
-          this.browser = null;
-        }
-        killTrackedBrowserProcess();
-
-        const memAfter = getSystemMemoryInfo();
-        logger.info(`BrowserService: proactive recycle complete (memory: ${memAfter.freeMB}MB free, ${memAfter.usedPercent}% used) - relaunching...`);
-        this.recycleScheduled = false;
-        this.warmUp();
-      } catch (err) {
-        logger.error(`BrowserService: proactive recycle failed: ${(err as Error).message}`);
-        this.recycleScheduled = false;
-      }
-    }, RECYCLE_DELAY_MS);
-  }
-
-  warmUp(): void {
-    if (this.isReady() || this.launching) {
-      return;
-    }
-    logger.info(`BrowserService: warming up browser...`);
-    this.ensureBrowser().then(() => {
-      logger.info(`BrowserService: warm-up complete, browser ready`);
-    }).catch((err) => {
-      logger.warn(`BrowserService: warm-up failed: ${(err as Error).message}, will retry on first request`);
-    });
-  }
-
+  /**
+   * 关闭所有会话和浏览器实例
+   */
   async close() {
-    logger.info("BrowserService: shutting down all sessions and browser...");
-
-    this.stopHealthCheck();
+    logger.info("BrowserService: 正在关闭所有会话和浏览器...");
 
     for (const [token] of this.sessions) {
       await this.closeSession(token);
@@ -756,16 +402,15 @@ class BrowserService {
       try {
         await this.browser.close();
       } catch (err) {
+        // 忽略关闭错误
       }
       this.browser = null;
     }
 
-    killTrackedBrowserProcess();
-
-    logger.info("BrowserService: closed");
+    logger.info("BrowserService: 已关闭");
   }
 }
 
+// 单例导出
 const browserService = new BrowserService();
-browserService.warmUp();
 export default browserService;
